@@ -1,0 +1,13 @@
+[package]
+name = "antigen-winit"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+winit = "0.25.0"
+serde = "1.0.126"
+legion = "0.4.0"
+crossbeam-channel = "0.5.1"
+
+atomic-id = { path = "../atomic-id" }
+remote-channel = { path = "../remote-channel" }

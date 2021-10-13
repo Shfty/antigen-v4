@@ -1,0 +1,14 @@
+[package]
+name = "tui-debugger"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+legion = "0.4.0"
+tui = { version = "0.16.0", default-features=false, features = ["crossterm"] }
+uuid = "0.8.2"
+crossterm = "0.21.0"
+
+reflection = { path = "../reflection" }
+legion-debugger = { path = "../legion-debugger" }
+tui-widgets = { path = "../tui-widgets" }

@@ -1,0 +1,18 @@
+[package]
+name = "tui-test"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+crossterm = "0.21.0"
+crossbeam-channel = "0.5.1"
+serde_bytes = "0.11.5"
+
+tui = { version = "0.16.0", default-features = false, features = ["crossterm"] }
+serde = { version = "1.0.129", features = ["derive"] }
+
+reflection = { path = "../reflection" }
+reflection-tui = { path = "../reflection-tui" }
+

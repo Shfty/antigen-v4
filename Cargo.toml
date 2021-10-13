@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/*",
+]
+
+default-members = [
+    "crates/sandbox",
+    #"crates/tracing-test",
+    #"crates/tui-test",
+    #"crates/rusb-test",
+]

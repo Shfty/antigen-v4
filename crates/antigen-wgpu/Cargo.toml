@@ -1,0 +1,16 @@
+[package]
+name = "antigen-wgpu"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+winit = "0.25.0"
+wgpu = "0.10.2"
+futures = "0.3.17"
+crossbeam-channel = "0.5.1"
+serde = "1.0.130"
+legion = "0.4.0"
+
+atomic-id = { path = "../atomic-id" }
+antigen-winit = { path = "../antigen-winit" }
+remote-channel = { path = "../remote-channel" }

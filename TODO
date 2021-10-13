@@ -1,0 +1,160 @@
+* TUI Debugger
+    [ ] Develop generalized widget system based around reflection data model
+        * Parent-child nesting naturally forms a tree; no need to create a monolithic tree control
+        * Instead, compose from component parts and scroll wrappers
+        * Provide a default set of widgets to match the data model
+        * Extend via overrides based on some predicate
+    
+* Tracing Debugger
+    [ ] Integrate new channel-based tracing backend
+
+* Legion Debugger
+    [ ] Tidy archetype, entity and resource code following widget refactor
+
+    [✓] Trait setup for legion debugger
+        * Goal: Generalize debugging of legion's serialized world formats
+        * Should be able to create TUI, EGUI, Dear ImGui variants with equivalent functionality
+        [✓] Parse reflection data model into archetype / entity -specific IR
+        [✓] Implement ArchetypeDebugger and EntityDebugger traits
+
+    [✓] Resource support
+        * Legion provides no serialization support for resources
+        * Will need to enforce a Serialize constraint for debugging
+        [✓] Setup resource debugging registry
+        [✓] Implement manual fetch-and-serialize for display using the same approach as World
+
+    [>] Schedule support
+        * Legion provides no serialization support for schedules
+        * Will need to use tracing scope around schedule call to extract data
+        * Pass to debugger as optional param
+        * Probably best to avoid converting to IR with serde, since the trace tree is already IR
+
+    [>] TUI
+        [✓] Hierarchical input focus
+            * Needs to support top-level tabs, nested tabs, focused lists
+        [✓] Improve entity debugger
+            [✓] Use a Table, parse rows directly from entity list
+            [ ] Wrapping layout for components
+                * Currently space-inefficient
+        [✓] Unify styling
+            * Pass in a pre-styled Table when parsing the world into a widget
+            * Overwrite layout-specific borrow-only parameters when rendering inside widget
+        [ ] Better support for multi-threaded tracing
+            * Currently clears trace tree at start of game loop, parses at end
+            * This misses out on events that happen while the game loop is asleep
+                * Effectively limits visibility to a single-threaded view of multi-threaded state
+            * Clearing after parse results in unintuitive output
+                * Technically correct as it captures everything, but frames start in the middle and overlap
+            * Need a better solution for grouping and displaying trace data
+                * Likely based on callsites - group by module and target
+                * Show thread invocations in callsite entries
+                * Regardless, will have to improve capture
+                    * Flush / parse trace tree per thread for proper starts / ends
+                * Current model is still useful
+                    * But more for freeze-frames that show exactly what occurred on a given thread on a given frame
+                    * (Somewhat like the frame window in Godot's profiler)
+        [>] Improve styling
+            * Make use of more colors
+            * Different colors per tabline, per component, etc?
+            [✓] Need a separate color for non-active tabs
+                * Currently collides with white title color
+                * Use light variant of highlight color?
+                * Alternately, use red
+            [ ] Use info color for entity IDs, struct names
+            [ ] Use a new color for struct field names
+            [ ] Parse entity ID debug output for more control over display
+                * Will need to panic or fallback if format is not as expected
+            [ ] Figure out how to deal with Span and multi-line content
+                * Use Text type - plugs into Paragraph / ListItem
+        [ ] Generalize
+            * Should be able to specify override widgets for data with a specific shape
+            * This should range from top-level widgets like archetype / entity debuggers
+            * to granular ones like primitive types, or compositions like Position { x: f32, y: f32 }
+            * This should form the basis for editable widgets
+                * Which in turn forms the basis for deserialization
+            [ ] Use Index and Path as the basis of a general widget system
+            [ ] Use Index and Path as the basis of a general focus system
+        [ ] Fix layout overflow
+
+    [ ] Optimize
+        * Currently serializes entire world every frame
+        * This will scale very badly with larger worlds
+        * Need to find a way to leverage queries and events
+        [ ] Archetype Debugger
+            [ ] Listen for archetype create / destroy events
+            [ ] Maintain list of active archetypes, use to populate archetype list
+            [ ] Use queries to serialize only the active archetype
+            [ ] Serialize only a subset of entities from that archetype (repeater list pattern)
+                * Can queries take a range of entities?
+        [ ] Entity debugger
+            [ ] Maintain a list of active entities, use to populate list
+            [ ] Serialize only the active entity
+
+* Reflection
+    [✓] Automated debugger type registration
+        [✓] Use linkme crate w/inventory-style macros for registration
+        [✓] Add inventory support for platforms that can't use linkme
+        [✓] Create linkme / inventory -specific procedural registration macros that only need one parameter
+    [✓] Name API
+        * Need a way to fetch the name of a type without reading its data
+        * Give Data a name() method
+        * Print literal names for primitive types, name fields for structs
+    [✓] Index enum for fetching data from collections generically
+    [✓] Path enum for recursively traversing a Data tree
+    [ ] Consider whether Path should have a unit variant to represent root / no-op
+        * Probably helpful, as it aids composition
+        * Allows for a Default implementation
+        * Allows for more sensical is_empty() implementation
+        * Allows for inline builder methods instead of needing a separate struct
+        * Allows for matching the root element of a tree
+            * Makes it possible to compose, say, a deeply-nested UI in a single struct
+    [ ] Consider refactoring Path to be a newtype over Vec<Index> instead
+        * Currently a manual linked-list implementation w/Box indirection
+        * Not strongly typed (ex. IntegerIndex<StringIndex<DataIndex<()>>>), so not really necessary
+        * Using Vec would allow it to be treated as a collection, use iterators, etc.
+            * Opens up interesting possibilities like traversing path targets one-by-one
+    [ ] Insertion support using Path
+        * Should be able to add a new leaf to an existing Data tree using a path
+    [ ] Data matching functionality using Index and Path
+        * Specify a path to target data, use predicates to define the expected shape of the data
+        * Supply supplementary data alongside this (such as a class-specific UI widget)
+        * Return a reference to the data if it matches, false otherwise
+            * Need Option support for Index and Path
+        * Collect these predicates and associated data via plugin registry
+    [ ] Deserialization support
+        * Goal: Seamlessly deserializing edited entities into an existing world
+        * Legion's UUID support should be able to handle collision (i.e. by overwriting)
+        [ ] Implement Deserializer class
+
+* Plugin Registry
+    [✓] Create plugin-registry crate to wrap inventory and linkme
+    [ ] Proc macro symbol cleanup
+        * Currently not using camel-case for generated functions
+
+* Antigen
+    [ ] Port existing antigen functionality
+        * Will need to consider refactoring around legion resources where appropriate
+        [ ] components
+        [ ] rendering
+        [ ] winit
+        [ ] wgpu
+        [ ] winit-wgpu
+        [✓] log
+            * Will need this alongside tracing to capture all available downstream telemetry
+        [>] tracing / profiling
+            * Generalize across UI implementations using serde
+            [✓] Thread-aware reflection subscriber
+                [✓] Visualize trace tree in UI
+                [✓] Investigate unexpected output from sandbox execution
+                [✓] Make sure underlying data (current scopes etc) is as expected
+                    * Will probably need means to debug print it to the TUI
+            [✓] Implement records
+            [✓] Implement events
+            [ ] Test span / event fields
+            [ ] Tidy tracing_debugger code
+                [ ] Remove Trace methods that call unwrap, defer to TraceVariant
+                [ ] Proper module structure
+                [ ] Reduce code duplication (ReflectionLayer in particular)
+            [ ] Ensure no memory leaks are occurring inside TraceTree
+        [ ] crossterm
+        [ ] egui
