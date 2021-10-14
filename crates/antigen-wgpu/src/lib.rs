@@ -283,16 +283,11 @@ impl WgpuManager {
 
     pub fn add_render_pass(&self, constructor: Box<dyn RenderPass>) -> RenderPassId {
         let id = RenderPassId::next();
-        self.render_passes
-            .borrow_mut()
-            .insert(id, constructor);
+        self.render_passes.borrow_mut().insert(id, constructor);
         id
     }
 
-    pub fn render_pass(
-        &self,
-        id: &RenderPassId,
-    ) -> Option<Ref<'_, Box<dyn RenderPass>>> {
+    pub fn render_pass(&self, id: &RenderPassId) -> Option<Ref<'_, Box<dyn RenderPass>>> {
         let render_pass_constructors = self.render_passes.borrow();
         if render_pass_constructors.contains_key(id) {
             Some(Ref::map(render_pass_constructors, |v| v.get(id).unwrap()))
@@ -426,11 +421,28 @@ impl RenderPassComponent {
 pub trait RenderPass:
     FnMut(&mut CommandEncoder, &WgpuManager, &TextureView, ColorTargetState)
 {
+    fn render(
+        &mut self,
+        command_encoder: &mut CommandEncoder,
+        wgpu_manager: &WgpuManager,
+        view: &TextureView,
+        format: ColorTargetState,
+    );
 }
 
-impl<T> RenderPass for T where
-    T: FnMut(&mut CommandEncoder, &WgpuManager, &TextureView, ColorTargetState)
+impl<T> RenderPass for T
+where
+    T: FnMut(&mut CommandEncoder, &WgpuManager, &TextureView, ColorTargetState),
 {
+    fn render(
+        &mut self,
+        command_encoder: &mut CommandEncoder,
+        wgpu_manager: &WgpuManager,
+        view: &TextureView,
+        format: ColorTargetState,
+    ) {
+        self(command_encoder, wgpu_manager, view, format)
+    }
 }
 
 pub trait RenderPipelineConstructor: Fn(&WgpuManager, ColorTargetState) -> RenderPipeline {}

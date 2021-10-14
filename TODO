@@ -1,5 +1,17 @@
+* antigen-wgpu
+    [ ] Refactor to use cube renderer approach
+        Currently trying to store pass-private data generally (bind groups, pipelines)
+        Instead, client code should own it
+        Remove pipelines and bind groups from WgpuManager storage
+        Reimplement cube, triangle renderers as structs w/Renderer trait
+        Expose buffer IDs in state struct so ECS can modify via request
+
+* antigen-hid
+    [ ] Integrate with sandbox
+    [ ] Solidify API
+
 * TUI Debugger
-    [ ] Develop generalized widget system based around reflection data model
+    [>] Develop generalized widget system based around reflection data model
         * Parent-child nesting naturally forms a tree; no need to create a monolithic tree control
         * Instead, compose from component parts and scroll wrappers
         * Provide a default set of widgets to match the data model
@@ -135,10 +147,10 @@
     [ ] Port existing antigen functionality
         * Will need to consider refactoring around legion resources where appropriate
         [ ] components
-        [ ] rendering
-        [ ] winit
-        [ ] wgpu
-        [ ] winit-wgpu
+        [>] rendering
+        [>] winit
+        [>] wgpu
+        [>] winit-wgpu
         [✓] log
             * Will need this alongside tracing to capture all available downstream telemetry
         [>] tracing / profiling

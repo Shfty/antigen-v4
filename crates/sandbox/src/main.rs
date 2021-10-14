@@ -74,19 +74,13 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // Cube renderer
     let cube_render_entity = world.push(());
 
-    let (cube_render_data, cube_render_pipeline) = cube_render_pipeline(&wgpu_manager);
-
-    let cube_render_state_component =
-        CubeRenderStateComponent::from(cube_render_data.state_handle());
-
-    let cube_pipeline_id =
-        wgpu_manager.add_render_pipeline_constructor(Box::new(cube_render_pipeline));
+    let cube_render_state = Arc::new(RwLock::new(CubeRenderState::default()));
+    let cube_render_state_component = CubeRenderStateComponent::from(cube_render_state.clone());
 
     let cube_pass_id = wgpu_manager.add_render_pass(Box::new(cube_render_pass(
+        wgpu_manager,
         cube_render_entity,
-        cube_pipeline_id,
-        None,
-        cube_render_data,
+        cube_render_state.clone(),
     )));
 
     let mut cube_pass_component = RenderPassComponent::default();
@@ -178,7 +172,7 @@ fn main() {
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: None,
-            features: wgpu::Features::empty(),
+            features: wgpu::Features::NON_FILL_POLYGON_MODE,
             limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
         },
         None,
@@ -371,7 +365,7 @@ fn winit_thread<'a>(
                             .render_pass_constructors()
                             .get_mut(render_pass_id)
                         {
-                            render_pass(&mut encoder, &wgpu_responder, &view, format.into());
+                            render_pass.render(&mut encoder, &wgpu_responder, &view, format.into());
                         }
                     }
                 }

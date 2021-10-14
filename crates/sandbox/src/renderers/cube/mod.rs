@@ -1,6 +1,4 @@
-use antigen_wgpu::{
-    BindGroupId, BufferId, RenderPass, RenderPipelineConstructor, RenderPipelineId, WgpuManager,
-};
+use antigen_wgpu::{RenderPass, WgpuManager};
 use antigen_winit::{WindowComponent, WindowManager, WinitRequester};
 use bytemuck::{Pod, Zeroable};
 use cgmath::Zero;
@@ -174,45 +172,11 @@ impl From<Arc<RwLock<CubeRenderState>>> for CubeRenderStateComponent {
     }
 }
 
-pub struct CubeRenderData {
-    bind_group_id: BindGroupId,
-    index_buffer_id: BufferId,
-    vertex_buffer_id: BufferId,
-    uniform_buffer_id: BufferId,
-
-    state: Arc<RwLock<CubeRenderState>>,
-}
-
-impl CubeRenderData {
-    pub fn state_handle(&self) -> Arc<RwLock<CubeRenderState>> {
-        self.state.clone()
-    }
-
-    pub fn update_matrix(&self, wgpu_manager: &WgpuManager, aspect_ratio: f32) {
-        let queue = wgpu_manager.queue();
-        let state = self.state.read();
-
-        let mx_projection =
-            cgmath::perspective(cgmath::Deg(state.fov.min(179.0)), aspect_ratio, 1.0, 10.0);
-        let mx_view = cgmath::Matrix4::look_at_rh(
-            state.eye,
-            cgmath::Point3::new(0f32, 0.0, 0.0),
-            cgmath::Vector3::unit_z(),
-        );
-        let mx_correction = OPENGL_TO_WGPU_MATRIX;
-        let mx_total = mx_correction * mx_projection * mx_view;
-
-        let uniform_buf = wgpu_manager.buffer(&self.uniform_buffer_id).unwrap();
-
-        let mx_ref: &[f32; 16] = mx_total.as_ref();
-
-        queue.write_buffer(&uniform_buf, 0, bytemuck::cast_slice(mx_ref));
-    }
-}
-
-pub fn cube_render_pipeline<'a>(
+pub fn cube_render_pass(
     wgpu_manager: &WgpuManager,
-) -> (CubeRenderData, impl RenderPipelineConstructor) {
+    entity: Entity,
+    state: Arc<RwLock<CubeRenderState>>,
+) -> impl RenderPass {
     // Fetch resources
     let device = wgpu_manager.device();
     let queue = wgpu_manager.queue();
@@ -328,7 +292,7 @@ pub fn cube_render_pipeline<'a>(
 
     let bind_group_id = wgpu_manager.add_bind_group(bind_group);
 
-    let vertex_buffers = [wgpu::VertexBufferLayout {
+    let vertex_buffer_layouts = [wgpu::VertexBufferLayout {
         array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &[
@@ -350,122 +314,100 @@ pub fn cube_render_pipeline<'a>(
         source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
     });
 
-    (
-        CubeRenderData {
-            bind_group_id,
-            vertex_buffer_id,
-            index_buffer_id,
-            uniform_buffer_id,
-            state: Default::default(),
-        },
-        move |wgpu_manager: &WgpuManager, format: wgpu::ColorTargetState| {
-            let cube_shader = wgpu_manager.shader_module(&shader_id).unwrap();
-            let device = wgpu_manager.device();
-
-            let wire_pipeline = if device
-                .features()
-                .contains(wgpu::Features::NON_FILL_POLYGON_MODE)
-            {
-                let wire_pipeline =
-                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                        label: None,
-                        layout: Some(&pipeline_layout),
-                        vertex: wgpu::VertexState {
-                            module: &cube_shader,
-                            entry_point: "vs_main",
-                            buffers: &vertex_buffers,
-                        },
-                        fragment: Some(wgpu::FragmentState {
-                            module: &cube_shader,
-                            entry_point: "fs_wire",
-                            targets: &[wgpu::ColorTargetState {
-                                format: format.format,
-                                blend: Some(wgpu::BlendState {
-                                    color: wgpu::BlendComponent {
-                                        operation: wgpu::BlendOperation::Add,
-                                        src_factor: wgpu::BlendFactor::SrcAlpha,
-                                        dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                    },
-                                    alpha: wgpu::BlendComponent::REPLACE,
-                                }),
-                                write_mask: wgpu::ColorWrites::ALL,
-                            }],
-                        }),
-                        primitive: wgpu::PrimitiveState {
-                            front_face: wgpu::FrontFace::Ccw,
-                            cull_mode: Some(wgpu::Face::Back),
-                            polygon_mode: wgpu::PolygonMode::Line,
-                            ..Default::default()
-                        },
-                        depth_stencil: None,
-                        multisample: wgpu::MultisampleState::default(),
-                    });
-
-                Some(wire_pipeline)
-            } else {
-                None
-            };
-
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: None,
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &cube_shader,
-                    entry_point: "vs_main",
-                    buffers: &vertex_buffers,
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &cube_shader,
-                    entry_point: "fs_main",
-                    targets: &[format.into()],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-            })
-        },
-    )
-}
-
-pub fn cube_render_pass(
-    entity: Entity,
-    pipeline: RenderPipelineId,
-    wire_pipeline: Option<RenderPipelineId>,
-    cube_render_data: CubeRenderData,
-) -> impl RenderPass {
     let mut prev_width = 0u32;
     let mut prev_height = 0u32;
     let mut prev_eye = cgmath::Point3::new(0.0f32, 0.0, 0.0);
     let mut prev_fov = 0f32;
 
+    let mut cube_pipe = None;
+    let mut wire_pipe = None;
+
     move |encoder: &mut wgpu::CommandEncoder,
           wgpu_manager: &WgpuManager,
           view: &wgpu::TextureView,
           format: wgpu::ColorTargetState| {
+        let device = wgpu_manager.device();
+        let queue = wgpu_manager.queue();
+
+        if cube_pipe.is_none() {
+            let cube_shader = wgpu_manager.shader_module(&shader_id).unwrap();
+
+            cube_pipe = Some(
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &cube_shader,
+                        entry_point: "vs_main",
+                        buffers: &vertex_buffer_layouts,
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &cube_shader,
+                        entry_point: "fs_main",
+                        targets: &[format.clone().into()],
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        cull_mode: Some(wgpu::Face::Back),
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                }),
+            )
+        }
+
+        if wire_pipe.is_none()
+            && device
+                .features()
+                .contains(wgpu::Features::NON_FILL_POLYGON_MODE)
+        {
+            let cube_shader = wgpu_manager.shader_module(&shader_id).unwrap();
+
+            wire_pipe = Some(
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &cube_shader,
+                        entry_point: "vs_main",
+                        buffers: &vertex_buffer_layouts,
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &cube_shader,
+                        entry_point: "fs_wire",
+                        targets: &[wgpu::ColorTargetState {
+                            format: format.format,
+                            blend: Some(wgpu::BlendState {
+                                color: wgpu::BlendComponent {
+                                    operation: wgpu::BlendOperation::Add,
+                                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                },
+                                alpha: wgpu::BlendComponent::REPLACE,
+                            }),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }],
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        front_face: wgpu::FrontFace::Ccw,
+                        cull_mode: Some(wgpu::Face::Back),
+                        polygon_mode: wgpu::PolygonMode::Line,
+                        ..Default::default()
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                }),
+            )
+        }
+
         // Fetch resources
-        let cube_pipeline = wgpu_manager
-            .render_pipeline(&pipeline, format.clone())
-            .unwrap();
-        let wire_pipeline = wire_pipeline.map(|wire_pipeline| {
-            wgpu_manager
-                .render_pipeline(&wire_pipeline, format)
-                .unwrap()
-        });
+        let cube_pipeline = cube_pipe.as_ref().unwrap();
 
-        let bind_group = wgpu_manager
-            .bind_group(&cube_render_data.bind_group_id)
-            .unwrap();
-        let index_buf = wgpu_manager
-            .buffer(&cube_render_data.index_buffer_id)
-            .unwrap();
-        let vertex_buf = wgpu_manager
-            .buffer(&cube_render_data.vertex_buffer_id)
-            .unwrap();
+        let bind_group = wgpu_manager.bind_group(&bind_group_id).unwrap();
+        let index_buf = wgpu_manager.buffer(&index_buffer_id).unwrap();
+        let vertex_buf = wgpu_manager.buffer(&vertex_buffer_id).unwrap();
 
-        let state = cube_render_data.state.read();
+        let state = state.read();
         let fov = state.fov;
         let eye = state.eye;
         drop(state);
@@ -477,7 +419,22 @@ pub fn cube_render_pass(
         let width = *width;
         let height = *height;
         if width != prev_width || height != prev_height || fov != prev_fov || eye != prev_eye {
-            cube_render_data.update_matrix(wgpu_manager, width as f32 / height as f32);
+            let aspect_ratio = width as f32 / height as f32;
+            let mx_projection =
+                cgmath::perspective(cgmath::Deg(fov.max(1.0).min(179.0)), aspect_ratio, 1.0, 10.0);
+            let mx_view = cgmath::Matrix4::look_at_rh(
+                eye,
+                cgmath::Point3::new(0f32, 0.0, 0.0),
+                cgmath::Vector3::unit_z(),
+            );
+            let mx_correction = OPENGL_TO_WGPU_MATRIX;
+            let mx_total = mx_correction * mx_projection * mx_view;
+
+            let uniform_buf = wgpu_manager.buffer(&uniform_buffer_id).unwrap();
+
+            let mx_ref: &[f32; 16] = mx_total.as_ref();
+
+            queue.write_buffer(&uniform_buf, 0, bytemuck::cast_slice(mx_ref));
 
             prev_width = width;
             prev_height = height;
@@ -512,7 +469,7 @@ pub fn cube_render_pass(
         rpass.insert_debug_marker("Draw!");
         rpass.draw_indexed(0..36, 0, 0..1);
 
-        if let Some(ref pipeline) = wire_pipeline {
+        if let Some(ref pipeline) = wire_pipe.as_ref() {
             rpass.set_pipeline(pipeline);
             rpass.draw_indexed(0..36, 0, 0..1);
         }
@@ -529,13 +486,12 @@ pub fn integrate_cube_renderer(
 ) {
     let entity = *entity;
 
-    let delta = timing.delta_time().as_secs_f32();
     let mut guard = cube_render_state.write();
-    guard.fov += delta * 5.0;
 
     let total = timing.total_time().as_secs_f32();
     guard.eye.x = total.sin() * 1.5;
     guard.eye.y = total.cos() * -5.0;
+    guard.fov = ((total * 0.2).sin() * 90.0) + 90.0;
 
     winit_requester.send_request(Box::new(move |window_manager: &mut WindowManager, _| {
         if let Some(window) = window_manager.window(&entity) {
