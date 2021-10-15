@@ -57,10 +57,8 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     log::trace!("Populating entities");
 
     // Triangle renderer
-    let triangle_pipeline_id = wgpu_manager
-        .add_render_pipeline_constructor(Box::new(triangle_render_pipeline(&wgpu_manager)));
     let triangle_pass_id =
-        wgpu_manager.add_render_pass(Box::new(triangle_render_pass(triangle_pipeline_id)));
+        wgpu_manager.add_render_pass(Box::new(TriangleRenderer::new(&wgpu_manager)));
 
     let mut triangle_pass_component = RenderPassComponent::default();
     triangle_pass_component.add_render_pass(triangle_pass_id);
@@ -74,14 +72,10 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // Cube renderer
     let cube_render_entity = world.push(());
 
-    let cube_render_state = Arc::new(RwLock::new(CubeRenderState::default()));
-    let cube_render_state_component = CubeRenderStateComponent::from(cube_render_state.clone());
-
-    let cube_pass_id = wgpu_manager.add_render_pass(Box::new(cube_render_pass(
-        wgpu_manager,
-        cube_render_entity,
-        cube_render_state.clone(),
-    )));
+    let cube_renderer = CubeRenderer::new(wgpu_manager, cube_render_entity);
+    let cube_render_state_component =
+        CubeRenderStateComponent::from(cube_renderer.take_state_handle());
+    let cube_pass_id = wgpu_manager.add_render_pass(Box::new(cube_renderer));
 
     let mut cube_pass_component = RenderPassComponent::default();
     cube_pass_component.add_render_pass(cube_pass_id);
@@ -361,10 +355,7 @@ fn winit_thread<'a>(
 
                 if let Some(render_passes) = wgpu_responder.entity_render_passes(&entity) {
                     for render_pass_id in render_passes.iter() {
-                        for render_pass in wgpu_responder
-                            .render_pass_constructors()
-                            .get_mut(render_pass_id)
-                        {
+                        for render_pass in wgpu_responder.render_passes().get_mut(render_pass_id) {
                             render_pass.render(&mut encoder, &wgpu_responder, &view, format.into());
                         }
                     }

@@ -9,19 +9,15 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 use wgpu::{
-    Adapter, BindGroup, Buffer, ColorTargetState, CommandEncoder, Device, Instance, PresentMode,
-    Queue, RenderPipeline, ShaderModule, Surface, SurfaceConfiguration, TextureView,
+    Adapter, Buffer, ColorTargetState, CommandEncoder, Device, Instance, PresentMode, Queue,
+    Surface, SurfaceConfiguration, TextureView,
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
 pub type WgpuRequester = RemoteRequester<WgpuManager, WinitResponder, World>;
 pub type WgpuResponder = RemoteResponder<WgpuManager, WinitResponder, World>;
 
-atomic_id!(NEXT_SHADER_ID, ShaderId);
-atomic_id!(NEXT_PIPELINE_LAYOUT_ID, PipelineLayoutId);
-atomic_id!(NEXT_RENDER_PIPELINE_ID, RenderPipelineId);
 atomic_id!(NEXT_RENDER_PASS_ID, RenderPassId);
-atomic_id!(NEXT_BIND_GROUP_ID, BindGroupId);
 atomic_id!(NEXT_BUFFER_ID, BufferId);
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -112,15 +108,9 @@ pub struct WgpuManager {
     surface_configurations: HashMap<Entity, SurfaceConfiguration>,
     surfaces: HashMap<Entity, Surface>,
 
-    render_pipeline_constructors:
-        RefCell<BTreeMap<RenderPipelineId, Box<dyn RenderPipelineConstructor>>>,
-    render_pipelines: RefCell<BTreeMap<RenderPipelineId, RenderPipeline>>,
-
     render_passes: RefCell<BTreeMap<RenderPassId, Box<dyn RenderPass>>>,
     entity_render_passes: RefCell<HashMap<Entity, Vec<RenderPassId>>>,
 
-    shader_modules: RefCell<BTreeMap<ShaderId, ShaderModule>>,
-    bind_groups: RefCell<BTreeMap<BindGroupId, BindGroup>>,
     buffers: RefCell<BTreeMap<BufferId, Buffer>>,
 }
 
@@ -133,12 +123,8 @@ impl WgpuManager {
             queue,
             surface_configurations: Default::default(),
             surfaces: Default::default(),
-            render_pipeline_constructors: Default::default(),
-            render_pipelines: Default::default(),
-            shader_modules: Default::default(),
             render_passes: Default::default(),
             entity_render_passes: Default::default(),
-            bind_groups: Default::default(),
             buffers: Default::default(),
         }
     }
@@ -165,40 +151,6 @@ impl WgpuManager {
 
     pub fn surface(&self, entity: &Entity) -> Option<&Surface> {
         self.surfaces.get(entity)
-    }
-
-    pub fn render_pipeline(
-        &self,
-        render_pipeline_id: &RenderPipelineId,
-        format: ColorTargetState,
-    ) -> Option<Ref<'_, RenderPipeline>> {
-        self.try_create_render_pipeline(render_pipeline_id, format);
-        let render_pipelines = self.render_pipelines.borrow();
-        if render_pipelines.contains_key(render_pipeline_id) {
-            Some(Ref::map(render_pipelines, |v| {
-                v.get(render_pipeline_id).unwrap()
-            }))
-        } else {
-            None
-        }
-    }
-
-    pub fn add_render_pipeline_constructor(
-        &self,
-        constructor: Box<dyn RenderPipelineConstructor>,
-    ) -> RenderPipelineId {
-        let id = RenderPipelineId::next();
-        self.render_pipeline_constructors
-            .borrow_mut()
-            .insert(id, constructor);
-        id
-    }
-
-    fn try_create_render_pipeline(&self, id: &RenderPipelineId, format: ColorTargetState) {
-        if let Some(constructor) = self.render_pipeline_constructors.borrow().get(id) {
-            let pipeline = constructor(&self, format);
-            self.render_pipelines.borrow_mut().insert(*id, pipeline);
-        }
     }
 
     pub fn create_surface_for(&mut self, entity: Entity, window: &Window) {
@@ -243,44 +195,6 @@ impl WgpuManager {
             .unwrap_or_else(|| panic!("No surface configuration with ID {:?}", entity));
     }
 
-    pub fn shader_module(&self, shader_id: &ShaderId) -> Option<Ref<'_, ShaderModule>> {
-        let shader_modules = self.shader_modules.borrow();
-        if shader_modules.contains_key(shader_id) {
-            Some(Ref::map(shader_modules, |v| v.get(shader_id).unwrap()))
-        } else {
-            None
-        }
-    }
-
-    pub fn create_shader_module(
-        &self,
-        device: &Device,
-        descriptor: &wgpu::ShaderModuleDescriptor,
-    ) -> ShaderId {
-        let shader_module = device.create_shader_module(descriptor);
-        let shader_id = ShaderId::next();
-        self.shader_modules
-            .borrow_mut()
-            .insert(shader_id, shader_module);
-        shader_id
-    }
-
-    pub fn load_shader(&self, descriptor: &wgpu::ShaderModuleDescriptor) -> ShaderId {
-        let shader_module = self.device.create_shader_module(descriptor);
-        let shader_id = ShaderId::next();
-        self.shader_modules
-            .borrow_mut()
-            .insert(shader_id, shader_module);
-        shader_id
-    }
-
-    pub fn load_shaders<'a, I>(&'a mut self, descriptors: I) -> impl Iterator<Item = ShaderId> + 'a
-    where
-        I: Iterator<Item = &'a wgpu::ShaderModuleDescriptor<'a>> + 'a,
-    {
-        descriptors.map(move |descriptor| self.load_shader(descriptor))
-    }
-
     pub fn add_render_pass(&self, constructor: Box<dyn RenderPass>) -> RenderPassId {
         let id = RenderPassId::next();
         self.render_passes.borrow_mut().insert(id, constructor);
@@ -305,9 +219,7 @@ impl WgpuManager {
         }
     }
 
-    pub fn render_pass_constructors(
-        &self,
-    ) -> RefMut<'_, BTreeMap<RenderPassId, Box<dyn RenderPass>>> {
+    pub fn render_passes(&self) -> RefMut<'_, BTreeMap<RenderPassId, Box<dyn RenderPass>>> {
         self.render_passes.borrow_mut()
     }
 
@@ -332,21 +244,6 @@ impl WgpuManager {
                 .position(|pass| *pass == *render_pass)
                 .unwrap(),
         );
-    }
-
-    pub fn add_bind_group(&self, bind_group: BindGroup) -> BindGroupId {
-        let id = BindGroupId::next();
-        self.bind_groups.borrow_mut().insert(id, bind_group);
-        id
-    }
-
-    pub fn bind_group(&self, bind_group: &BindGroupId) -> Option<Ref<'_, BindGroup>> {
-        let bind_groups = self.bind_groups.borrow();
-        if bind_groups.contains_key(bind_group) {
-            Some(Ref::map(bind_groups, |v| v.get(bind_group).unwrap()))
-        } else {
-            None
-        }
     }
 
     pub fn add_buffer(&self, buffer: Buffer) -> BufferId {
@@ -418,12 +315,10 @@ impl RenderPassComponent {
     }
 }
 
-pub trait RenderPass:
-    FnMut(&mut CommandEncoder, &WgpuManager, &TextureView, ColorTargetState)
-{
+pub trait RenderPass {
     fn render(
         &mut self,
-        command_encoder: &mut CommandEncoder,
+        encoder: &mut CommandEncoder,
         wgpu_manager: &WgpuManager,
         view: &TextureView,
         format: ColorTargetState,
@@ -436,19 +331,14 @@ where
 {
     fn render(
         &mut self,
-        command_encoder: &mut CommandEncoder,
+        encoder: &mut CommandEncoder,
         wgpu_manager: &WgpuManager,
         view: &TextureView,
         format: ColorTargetState,
     ) {
-        self(command_encoder, wgpu_manager, view, format)
+        self(encoder, wgpu_manager, view, format)
     }
 }
-
-pub trait RenderPipelineConstructor: Fn(&WgpuManager, ColorTargetState) -> RenderPipeline {}
-
-impl<T> RenderPipelineConstructor for T where T: Fn(&WgpuManager, ColorTargetState) -> RenderPipeline
-{}
 
 #[legion::system(par_for_each)]
 pub fn create_surfaces(
