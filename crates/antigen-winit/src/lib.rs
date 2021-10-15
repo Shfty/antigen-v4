@@ -1,7 +1,11 @@
 use legion::{Entity, World};
 use remote_channel::*;
-use std::collections::HashMap;
-use winit::{event_loop::EventLoopWindowTarget, window::{Window, WindowId}};
+use serde::ser::SerializeStruct;
+use std::collections::{HashMap, HashSet};
+use winit::{
+    event_loop::EventLoopWindowTarget,
+    window::{Window, WindowId},
+};
 
 pub type WinitRequester = RemoteRequester<WindowManager, EventLoopWindowTarget<()>, World>;
 pub type WinitResponder = RemoteResponder<WindowManager, EventLoopWindowTarget<()>, World>;
@@ -29,6 +33,16 @@ impl From<WindowId> for WindowState {
 #[derive(Default)]
 pub struct WindowComponent {
     state: WindowState,
+    always_redraw: bool,
+}
+
+impl WindowComponent {
+    pub fn always_redraw() -> Self {
+        WindowComponent {
+            state: Default::default(),
+            always_redraw: true,
+        }
+    }
 }
 
 impl serde::Serialize for WindowComponent {
@@ -36,14 +50,17 @@ impl serde::Serialize for WindowComponent {
     where
         S: serde::Serializer,
     {
+        let mut s = serializer.serialize_struct("WindowComponent", 2)?;
         match &self.state {
-            WindowState::Invalid => serializer.serialize_str("Invalid"),
-            WindowState::Pending => serializer.serialize_str("Pending"),
+            WindowState::Invalid => s.serialize_field("state", "Invalid")?,
+            WindowState::Pending => s.serialize_field("state", "Pending")?,
             WindowState::Valid(window) => {
-                serializer.serialize_str(&format!("Valid({:#?})", window))
+                s.serialize_field("state", &format!("Valid({:#?})", window))?
             }
-            WindowState::Closed => serializer.serialize_str("Closed"),
+            WindowState::Closed => s.serialize_field("state", "Closed")?,
         }
+        s.serialize_field("always_redraw", &self.always_redraw)?;
+        s.end()
     }
 }
 
@@ -90,6 +107,7 @@ impl WindowComponent {
 pub struct WindowManager {
     windows: HashMap<Entity, Window>,
     entity_ids: HashMap<WindowId, Entity>,
+    always_redraw_windows: HashSet<WindowId>,
 }
 
 impl WindowManager {
@@ -112,12 +130,25 @@ impl WindowManager {
         window_id
     }
 
+    pub fn always_redraw_windows(&self) -> impl Iterator<Item = &WindowId> {
+        self.always_redraw_windows.iter()
+    }
+
+    pub fn set_window_always_redraw(&mut self, window_id: &WindowId, always_redraw: bool) {
+        if always_redraw {
+            self.always_redraw_windows.insert(*window_id);
+        } else {
+            self.always_redraw_windows.remove(window_id);
+        }
+    }
+
     pub fn close_window(&mut self, window_id: &WindowId) {
         let entity = *self.entity_ids.get(window_id).unwrap();
-        self
-            .windows
+        self.windows
             .remove(&entity)
             .unwrap_or_else(|| panic!("No window with ID {:?}", entity));
+
+        self.always_redraw_windows.remove(window_id);
 
         self.entity_ids.remove(window_id);
     }
@@ -132,9 +163,13 @@ pub fn create_windows(
     let entity = *entity;
     if let WindowState::Invalid = window.state() {
         window.set_pending();
+        let always_redraw = window.always_redraw;
 
         wm_requester.send_request(Box::new(move |wm, window_target| {
             let window_id = wm.create_window_for(entity, window_target);
+            if always_redraw {
+                wm.set_window_always_redraw(&window_id, true);
+            }
 
             Box::new(move |world: &mut World| {
                 if let Some(mut entry) = world.entry(entity) {

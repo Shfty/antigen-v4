@@ -10,8 +10,11 @@ use components::*;
 use resources::*;
 use systems::*;
 
+use renderers::boids::*;
+use renderers::conservative_raster::*;
 use renderers::cube::*;
 use renderers::hello_triangle::*;
+use renderers::msaa_lines::*;
 
 use crossbeam_channel::{Receiver, Sender};
 use legion_debugger::{Archetypes, Entities};
@@ -83,13 +86,70 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     world.push_with_id(
         cube_render_entity,
         (
-            WindowComponent::default(),
+            WindowComponent::always_redraw(),
             SurfaceComponent::default(),
             cube_pass_component,
             cube_render_state_component,
         ),
     );
 
+    // MSAA lines renderer
+    let msaa_lines_render_entity = world.push(());
+
+    let msaa_lines_pass_id = wgpu_manager.add_render_pass(Box::new(MsaaLinesRenderer::new(
+        &wgpu_manager,
+        msaa_lines_render_entity,
+    )));
+
+    let mut msaa_lines_pass_component = RenderPassComponent::default();
+    msaa_lines_pass_component.add_render_pass(msaa_lines_pass_id);
+
+    world.push_with_id(
+        msaa_lines_render_entity,
+        (
+            WindowComponent::default(),
+            SurfaceComponent::default(),
+            msaa_lines_pass_component,
+        ),
+    );
+
+    // Boids renderer
+    let boids_render_entity = world.push(());
+
+    let boids_pass_id = wgpu_manager.add_render_pass(Box::new(BoidsRenderer::new(&wgpu_manager)));
+
+    let mut boids_pass_component = RenderPassComponent::default();
+    boids_pass_component.add_render_pass(boids_pass_id);
+
+    world.push_with_id(
+        boids_render_entity,
+        (
+            WindowComponent::always_redraw(),
+            SurfaceComponent::default(),
+            boids_pass_component,
+        ),
+    );
+
+    // Conservative raster renderer
+    let conservative_raster_pass_entity = world.push(());
+
+    let conservative_raster_pass_id = wgpu_manager.add_render_pass(Box::new(
+        ConservativeRasterRenderer::new(&wgpu_manager, conservative_raster_pass_entity),
+    ));
+
+    let mut conservative_raster_pass_component = RenderPassComponent::default();
+    conservative_raster_pass_component.add_render_pass(conservative_raster_pass_id);
+
+    world.push_with_id(
+        conservative_raster_pass_entity,
+        (
+            WindowComponent::default(),
+            SurfaceComponent::default(),
+            conservative_raster_pass_component,
+        ),
+    );
+
+    // Test entity
     let entity: Entity = world.push((Position { x: 0.0, y: 0.0 }, Velocity { dx: 0.5, dy: 0.0 }));
 
     let _entities: &[Entity] = world.extend(vec![
@@ -160,13 +220,14 @@ fn main() {
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
         power_preference: wgpu::PowerPreference::default(),
         compatible_surface: None,
+        force_fallback_adapter: false,
     }))
     .unwrap();
 
     let (device, queue) = pollster::block_on(adapter.request_device(
         &wgpu::DeviceDescriptor {
             label: None,
-            features: wgpu::Features::NON_FILL_POLYGON_MODE,
+            features: wgpu::Features::POLYGON_MODE_LINE | wgpu::Features::CONSERVATIVE_RASTERIZATION,
             limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
         },
         None,
@@ -319,6 +380,13 @@ fn winit_thread<'a>(
                     })
                     .unwrap();
 
+                for window_id in wm_responder.always_redraw_windows() {
+                    wm_responder
+                        .window(&wm_responder.entity_id(window_id).unwrap())
+                        .unwrap()
+                        .request_redraw();
+                }
+
                 // Exit if requested by the main loop state
                 if let MainLoopState::Break = main_loop_state {
                     *control_flow = ControlFlow::Exit;
@@ -335,8 +403,8 @@ fn winit_thread<'a>(
                     return;
                 };
 
-                let frame = if let Ok(frame) = surface.get_current_frame() {
-                    frame.output
+                let frame = if let Ok(frame) = surface.get_current_texture() {
+                    frame
                 } else {
                     return;
                 };
@@ -364,6 +432,8 @@ fn winit_thread<'a>(
                 wgpu_responder
                     .queue()
                     .submit(std::iter::once(encoder.finish()));
+
+                frame.present();
             }
             Event::WindowEvent { window_id, event } => match event {
                 WindowEvent::Resized(size) => {

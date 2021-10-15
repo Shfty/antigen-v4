@@ -372,7 +372,7 @@ impl CubeRenderer {
             if self.wire_pipeline.is_none()
                 && device
                     .features()
-                    .contains(wgpu::Features::NON_FILL_POLYGON_MODE)
+                    .contains(wgpu::Features::POLYGON_MODE_LINE)
             {
                 self.wire_pipeline = Some(self.create_wire_pipeline(device, format.clone()));
             }
@@ -551,11 +551,4 @@ pub fn integrate_cube_renderer(
     guard.eye.x = total.sin() * 1.5;
     guard.eye.y = total.cos() * -5.0;
     guard.fov = ((total * 0.2).sin() * 90.0) + 90.0;
-
-    winit_requester.send_request(Box::new(move |window_manager: &mut WindowManager, _| {
-        if let Some(window) = window_manager.window(&entity) {
-            window.request_redraw();
-        }
-        Box::new(move |_| ())
-    }));
 }
