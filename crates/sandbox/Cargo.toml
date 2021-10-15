@@ -25,6 +25,10 @@ crossbeam-channel = "0.5.1"
 futures = "0.3.17"
 pollster = "0.2.4"
 cgmath = "0.18.0"
+png = "0.17.2"
+obj = "0.10.2"
+ddsfile = "0.4.0"
+noise = "0.7.0"
 
 tui = { version = "0.16.0", default-features=false, features = ["crossterm"] }
 bytemuck = { version = "1.7.2", features = ["derive"] }

@@ -11,13 +11,16 @@ use resources::*;
 use systems::*;
 
 use renderers::boids::*;
+use renderers::bunnymark::*;
 use renderers::conservative_raster::*;
 use renderers::cube::*;
 use renderers::hello_triangle::*;
 use renderers::mipmap::*;
 use renderers::msaa_lines::*;
 use renderers::shadow::*;
+use renderers::skybox::*;
 use renderers::texture_arrays::*;
+use renderers::water::*;
 
 use crossbeam_channel::{Receiver, Sender};
 use legion_debugger::{Archetypes, Entities};
@@ -37,6 +40,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use wgpu::SurfaceTexture;
 use winit::window::WindowId;
 use winit::{
     event::{Event, WindowEvent},
@@ -199,9 +203,67 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     world.push_with_id(
         shadow_render_entity,
         (
-            WindowComponent::default(),
+            WindowComponent::always_redraw(),
             SurfaceComponent::default(),
             shadow_pass_component,
+        ),
+    );
+
+    // Bunnymark renderer
+    let bunnymark_render_entity = world.push(());
+
+    let bunnymark_pass_id = wgpu_manager.add_render_pass(Box::new(BunnymarkRenderer::new(
+        &wgpu_manager,
+        bunnymark_render_entity,
+    )));
+    let mut bunnymark_pass_component = RenderPassComponent::default();
+    bunnymark_pass_component.add_render_pass(bunnymark_pass_id);
+
+    world.push_with_id(
+        bunnymark_render_entity,
+        (
+            WindowComponent::always_redraw(),
+            SurfaceComponent::default(),
+            bunnymark_pass_component,
+        ),
+    );
+
+    // Skybox renderer
+    let skybox_pass_entity = world.push(());
+    let skybox_pass_id = wgpu_manager.add_render_pass(Box::new(SkyboxRenderer::new(
+        &wgpu_manager,
+        skybox_pass_entity,
+    )));
+
+    let mut skybox_pass_component = RenderPassComponent::default();
+    skybox_pass_component.add_render_pass(skybox_pass_id);
+
+    world.push_with_id(
+        skybox_pass_entity,
+        (
+            WindowComponent::default(),
+            SurfaceComponent::default(),
+            skybox_pass_component,
+        ),
+    );
+
+    // Water renderer
+    let water_pass_entity = world.push(());
+
+    let water_pass_id = wgpu_manager.add_render_pass(Box::new(WaterRenderer::new(
+        &wgpu_manager,
+        water_pass_entity,
+    )));
+
+    let mut water_pass_component = RenderPassComponent::default();
+    water_pass_component.add_render_pass(water_pass_id);
+
+    world.push_with_id(
+        water_pass_entity,
+        (
+            WindowComponent::always_redraw(),
+            SurfaceComponent::default(),
+            water_pass_component,
         ),
     );
 
@@ -448,12 +510,43 @@ fn winit_thread<'a>(
                     })
                     .unwrap();
 
-                for window_id in wm_responder.always_redraw_windows() {
-                    wm_responder
-                        .window(&wm_responder.entity_id(window_id).unwrap())
-                        .unwrap()
-                        .request_redraw();
-                }
+                let mut encoder = wgpu_responder
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                let frames = wm_responder
+                    .always_redraw_windows()
+                    .flat_map(|window_id| {
+                        let entity = wm_responder.entity_id(&window_id).unwrap();
+
+                        let surface = if let Some(surface) = wgpu_responder.surface(&entity) {
+                            surface
+                        } else {
+                            return None;
+                        };
+
+                        let frame = if let Ok(frame) = surface.get_current_texture() {
+                            frame
+                        } else {
+                            return None;
+                        };
+
+                        redraw_window(&wgpu_responder, entity, &mut encoder, &surface, &frame);
+
+                        Some(frame)
+                    })
+                    .collect::<Vec<SurfaceTexture>>();
+
+                // Submit queue
+                wgpu_responder
+                    .queue()
+                    .submit(std::iter::once(encoder.finish()));
+
+                // Present frames
+                frames
+                    .into_iter()
+                    .map(SurfaceTexture::present)
+                    .for_each(drop);
 
                 // Exit if requested by the main loop state
                 if let MainLoopState::Break = main_loop_state {
@@ -463,7 +556,31 @@ fn winit_thread<'a>(
             Event::RedrawRequested(window_id) => {
                 profiling::scope!("RedrawRequested");
 
-                redraw_window(&wm_responder, &wgpu_responder, window_id);
+                let mut encoder = wgpu_responder
+                    .device()
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                let entity = wm_responder.entity_id(&window_id).unwrap();
+
+                let surface = if let Some(surface) = wgpu_responder.surface(&entity) {
+                    surface
+                } else {
+                    return;
+                };
+
+                let frame = if let Ok(frame) = surface.get_current_texture() {
+                    frame
+                } else {
+                    return;
+                };
+
+                redraw_window(&wgpu_responder, entity, &mut encoder, &surface, &frame);
+
+                wgpu_responder
+                    .queue()
+                    .submit(std::iter::once(encoder.finish()));
+
+                frame.present();
             }
             Event::WindowEvent { window_id, event } => match event {
                 WindowEvent::Resized(size) => {
@@ -506,49 +623,27 @@ fn winit_thread<'a>(
 }
 
 fn redraw_window(
-    wm_responder: &WinitResponder,
     wgpu_responder: &WgpuResponder,
-    window_id: WindowId,
+    entity: Entity,
+    encoder: &mut wgpu::CommandEncoder,
+    surface: &wgpu::Surface,
+    frame: &SurfaceTexture,
 ) {
-    let entity = wm_responder.entity_id(&window_id).unwrap();
-
-    let surface = if let Some(surface) = wgpu_responder.surface(&entity) {
-        surface
-    } else {
-        return;
-    };
-
-    let frame = if let Ok(frame) = surface.get_current_texture() {
-        frame
-    } else {
-        return;
-    };
-
-    let view = frame
-        .texture
-        .create_view(&wgpu::TextureViewDescriptor::default());
-
-    let mut encoder = wgpu_responder
-        .device()
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-
-    let format = surface
-        .get_preferred_format(wgpu_responder.adapter())
-        .unwrap();
-
     if let Some(render_passes) = wgpu_responder.entity_render_passes(&entity) {
+        let format = surface
+            .get_preferred_format(wgpu_responder.adapter())
+            .unwrap();
+
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+
         for render_pass_id in render_passes.iter() {
             for render_pass in wgpu_responder.render_passes().get_mut(render_pass_id) {
-                render_pass.render(&mut encoder, &wgpu_responder, &view, format.into());
+                render_pass.render(encoder, &wgpu_responder, &view, format.into());
             }
         }
     }
-
-    wgpu_responder
-        .queue()
-        .submit(std::iter::once(encoder.finish()));
-
-    frame.present();
 }
 
 pub fn widget_rules(data: &mut Data, parent_type: TypeId) -> Option<Box<dyn DataWidget + '_>> {

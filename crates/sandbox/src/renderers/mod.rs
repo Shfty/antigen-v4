@@ -6,3 +6,6 @@ pub mod conservative_raster;
 pub mod mipmap;
 pub mod texture_arrays;
 pub mod shadow;
+pub mod bunnymark;
+pub mod skybox;
+pub mod water;
