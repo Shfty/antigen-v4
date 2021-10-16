@@ -1,7 +1,8 @@
-use std::num::NonZeroU32;
+use std::{num::NonZeroU32, rc::Rc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
-use wgpu::{PipelineLayout, RenderPipeline, ShaderModule, util::DeviceExt};
+use lazy::Lazy;
+use wgpu::{util::DeviceExt, Device, TextureFormat};
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -58,16 +59,12 @@ enum Color {
     Green,
 }
 
-#[derive(Debug)]
 pub struct TextureArraysRenderer {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     index_format: wgpu::IndexFormat,
     bind_group: wgpu::BindGroup,
-    pipeline_layout: PipelineLayout,
-    vs_module: ShaderModule,
-    fs_module: ShaderModule,
-    pipeline: Option<wgpu::RenderPipeline>,
+    pipeline: Lazy<wgpu::RenderPipeline, (Rc<Device>, TextureFormat)>,
     uniform_workaround: bool,
 }
 
@@ -215,36 +212,13 @@ impl TextureArraysRenderer {
 
         let index_format = wgpu::IndexFormat::Uint16;
 
-        Self {
-            bind_group,
-            vertex_buffer,
-            index_buffer,
-            index_format,
-            pipeline_layout,
-            vs_module,
-            fs_module,
-            pipeline: None,
-            uniform_workaround,
-        }
-    }
-}
-
-impl RenderPass for TextureArraysRenderer {
-    fn render(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        wgpu_manager: &WgpuManager,
-        view: &wgpu::TextureView,
-        format: wgpu::ColorTargetState,
-    ) {
-        let device = wgpu_manager.device();
-
-        if self.pipeline.is_none() {
-            self.pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
-            layout: Some(&self.pipeline_layout),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
-                module: &self.vs_module,
+                module: &vs_module,
                 entry_point: "main",
                 buffers: &[wgpu::VertexBufferLayout {
                     array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
@@ -253,7 +227,7 @@ impl RenderPass for TextureArraysRenderer {
                 }],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &self.fs_module,
+                module: &fs_module,
                 entry_point: "main",
                 targets: &[format.into()],
             }),
@@ -263,10 +237,30 @@ impl RenderPass for TextureArraysRenderer {
             },
             depth_stencil: None,
             multisample: wgpu::MultisampleState::default(),
-        }));
-        }
+        })
+            },
+        ));
 
-        let pipeline = self.pipeline.as_ref().unwrap();
+        Self {
+            bind_group,
+            vertex_buffer,
+            index_buffer,
+            index_format,
+            pipeline,
+            uniform_workaround,
+        }
+    }
+}
+
+impl RenderPass for TextureArraysRenderer {
+    fn render(
+        &mut self,
+        wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        config: &wgpu::SurfaceConfiguration,
+    ) {
+        let device = wgpu_manager.device();
 
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -281,7 +275,7 @@ impl RenderPass for TextureArraysRenderer {
             depth_stencil_attachment: None,
         });
 
-        rpass.set_pipeline(&pipeline);
+        rpass.set_pipeline(self.pipeline.get((device, config.format)));
         rpass.set_bind_group(0, &self.bind_group, &[]);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rpass.set_index_buffer(self.index_buffer.slice(..), self.index_format);

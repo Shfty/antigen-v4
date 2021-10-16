@@ -6,11 +6,15 @@ use serde::ser::SerializeStruct;
 use std::{
     cell::{Ref, RefCell, RefMut},
     collections::{BTreeMap, HashMap},
-    sync::atomic::{AtomicUsize, Ordering},
+    rc::Rc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 use wgpu::{
-    Adapter, Buffer, ColorTargetState, CommandEncoder, Device, Instance, PresentMode, Queue,
-    Surface, SurfaceConfiguration, TextureView,
+    Adapter, Buffer, CommandEncoder, Device, Instance, PresentMode, Queue, Surface,
+    SurfaceConfiguration, TextureView,
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
@@ -50,6 +54,13 @@ impl Default for SurfaceComponent {
 }
 
 impl SurfaceComponent {
+    pub fn new(present_mode: PresentMode) -> Self {
+        SurfaceComponent {
+            present_mode,
+            ..Default::default()
+        }
+    }
+
     pub fn state(&self) -> &SurfaceState {
         &self.state
     }
@@ -100,10 +111,10 @@ impl<'de> serde::Deserialize<'de> for SurfaceComponent {
 }
 
 pub struct WgpuManager {
-    instance: Instance,
-    adapter: Adapter,
-    device: Device,
-    queue: Queue,
+    instance: Rc<Instance>,
+    adapter: Rc<Adapter>,
+    device: Rc<Device>,
+    queue: Rc<Queue>,
 
     surface_configurations: HashMap<Entity, SurfaceConfiguration>,
     surfaces: HashMap<Entity, Surface>,
@@ -117,10 +128,10 @@ pub struct WgpuManager {
 impl WgpuManager {
     pub fn new(instance: Instance, adapter: Adapter, device: Device, queue: Queue) -> Self {
         WgpuManager {
-            instance,
-            adapter,
-            device,
-            queue,
+            instance: instance.into(),
+            adapter: adapter.into(),
+            device: device.into(),
+            queue: queue.into(),
             surface_configurations: Default::default(),
             surfaces: Default::default(),
             render_passes: Default::default(),
@@ -129,20 +140,20 @@ impl WgpuManager {
         }
     }
 
-    pub fn instance(&self) -> &Instance {
-        &self.instance
+    pub fn instance(&self) -> Rc<Instance> {
+        self.instance.clone()
     }
 
-    pub fn adapter(&self) -> &Adapter {
-        &self.adapter
+    pub fn adapter(&self) -> Rc<Adapter> {
+        self.adapter.clone()
     }
 
-    pub fn device(&self) -> &Device {
-        &self.device
+    pub fn device(&self) -> Rc<Device> {
+        self.device.clone()
     }
 
-    pub fn queue(&self) -> &Queue {
-        &self.queue
+    pub fn queue(&self) -> Rc<Queue> {
+        self.queue.clone()
     }
 
     pub fn surface_configuration(&self, entity: &Entity) -> Option<&SurfaceConfiguration> {
@@ -318,25 +329,25 @@ impl RenderPassComponent {
 pub trait RenderPass {
     fn render(
         &mut self,
-        encoder: &mut CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut CommandEncoder,
         view: &TextureView,
-        format: ColorTargetState,
+        config: &SurfaceConfiguration,
     );
 }
 
 impl<T> RenderPass for T
 where
-    T: FnMut(&mut CommandEncoder, &WgpuManager, &TextureView, ColorTargetState),
+    T: FnMut(&WgpuManager, &mut CommandEncoder, &TextureView, &SurfaceConfiguration),
 {
     fn render(
         &mut self,
-        encoder: &mut CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut CommandEncoder,
         view: &TextureView,
-        format: ColorTargetState,
+        config: &SurfaceConfiguration,
     ) {
-        self(encoder, wgpu_manager, view, format)
+        self(wgpu_manager, encoder, view, config)
     }
 }
 

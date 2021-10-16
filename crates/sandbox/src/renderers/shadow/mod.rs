@@ -1,7 +1,8 @@
 use std::{num::NonZeroU32, ops::Range, rc::Rc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
-use wgpu::{util::DeviceExt, PipelineLayout, RenderPipeline, ShaderModule};
+use lazy::Lazy;
+use wgpu::{util::DeviceExt, TextureFormat, Device};
 
 #[rustfmt::skip]
 #[allow(unused)]
@@ -160,20 +161,14 @@ struct Pass {
 }
 
 pub struct ShadowRenderer {
-    surface_entity: legion::Entity,
-
     entities: Vec<Entity>,
     lights: Vec<Light>,
     lights_are_dirty: bool,
     shadow_pass: Pass,
     entity_bind_group: wgpu::BindGroup,
-    local_bind_group_layout: wgpu::BindGroupLayout,
-    shadow_view: wgpu::TextureView,
-    shadow_sampler: wgpu::Sampler,
-    shader: ShaderModule,
-    light_storage_buf: wgpu::Buffer,
+    light_storage_buf: Rc<wgpu::Buffer>,
     entity_uniform_buf: wgpu::Buffer,
-    forward_pass: Option<Pass>,
+    forward_pass: Lazy<Pass, (Rc<Device>, TextureFormat)>,
     forward_depth: Option<wgpu::TextureView>,
 
     prev_width: u32,
@@ -208,7 +203,7 @@ impl ShadowRenderer {
         attributes: &wgpu::vertex_attr_array![0 => Sint8x4, 1 => Sint8x4],
     };
 
-    pub fn new(wgpu_manager: &WgpuManager, surface_entity: legion::Entity) -> Self {
+    pub fn new(wgpu_manager: &WgpuManager) -> Self {
         let adapter = wgpu_manager.adapter();
         let device = wgpu_manager.device();
 
@@ -416,7 +411,8 @@ impl ShadowRenderer {
                 target_view: shadow_target_views[1].take().unwrap(),
             },
         ];
-        let light_storage_buf = device.create_buffer(&wgpu::BufferDescriptor {
+
+        let light_storage_buf = Rc::new(device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: Self::light_uniform_size(),
             usage: if Self::supports_storage_resources(&adapter, &device) {
@@ -426,7 +422,7 @@ impl ShadowRenderer {
             } | wgpu::BufferUsages::COPY_SRC
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
-        });
+        }));
 
         let shader = device.create_shader_module(&wgpu::ShaderModuleDescriptor {
             label: None,
@@ -513,75 +509,10 @@ impl ShadowRenderer {
             }
         };
 
-        ShadowRenderer {
-            surface_entity,
-            entities,
-            lights,
-            lights_are_dirty: true,
-            local_bind_group_layout,
-            shader,
-            shadow_sampler,
-            shadow_view,
-            shadow_pass,
-            light_storage_buf,
-            entity_uniform_buf,
-            entity_bind_group,
-            forward_pass: None,
-            forward_depth: None,
-            prev_width: Default::default(),
-            prev_height: Default::default(),
-        }
-    }
-    fn generate_matrix(aspect_ratio: f32) -> cgmath::Matrix4<f32> {
-        let mx_projection = cgmath::perspective(cgmath::Deg(45f32), aspect_ratio, 1.0, 20.0);
-        let mx_view = cgmath::Matrix4::look_at_rh(
-            cgmath::Point3::new(3.0f32, -10.0, 6.0),
-            cgmath::Point3::new(0f32, 0.0, 0.0),
-            cgmath::Vector3::unit_z(),
-        );
-        let mx_correction = OPENGL_TO_WGPU_MATRIX;
-        mx_correction * mx_projection * mx_view
-    }
-
-    fn create_depth_texture(
-        config: &wgpu::SurfaceConfiguration,
-        device: &wgpu::Device,
-    ) -> wgpu::TextureView {
-        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: config.width,
-                height: config.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: Self::DEPTH_FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: None,
-        });
-
-        depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
-    }
-}
-
-impl RenderPass for ShadowRenderer {
-    fn render(
-        &mut self,
-        encoder: &mut wgpu::CommandEncoder,
-        wgpu_manager: &WgpuManager,
-        view: &wgpu::TextureView,
-        format: wgpu::ColorTargetState,
-    ) {
-        let adapter = wgpu_manager.adapter();
-        let device = wgpu_manager.device();
-        let queue = wgpu_manager.queue();
-        let config = wgpu_manager
-            .surface_configuration(&self.surface_entity)
-            .unwrap();
-
-        if self.forward_pass.is_none() || self.forward_depth.is_none() {
-            self.forward_pass = Some({
+        let lsb = light_storage_buf.clone();
+        let lights_len = lights.len();
+        let forward_pass = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
                 // Create pipeline layout
                 let bind_group_layout =
                     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -639,17 +570,18 @@ impl RenderPass for ShadowRenderer {
                         ],
                         label: None,
                     });
+
                 let pipeline_layout =
                     device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                         label: Some("main"),
-                        bind_group_layouts: &[&bind_group_layout, &self.local_bind_group_layout],
+                        bind_group_layouts: &[&bind_group_layout, &local_bind_group_layout],
                         push_constant_ranges: &[],
                     });
 
                 let mx_total = Self::generate_matrix(1.0);
                 let forward_uniforms = GlobalUniforms {
                     proj: *mx_total.as_ref(),
-                    num_lights: [self.lights.len() as u32, 0, 0, 0],
+                    num_lights: [lights_len as u32, 0, 0, 0],
                 };
                 let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("Uniform Buffer"),
@@ -667,15 +599,15 @@ impl RenderPass for ShadowRenderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: self.light_storage_buf.as_entire_binding(),
+                            resource: lsb.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
-                            resource: wgpu::BindingResource::TextureView(&self.shadow_view),
+                            resource: wgpu::BindingResource::TextureView(&shadow_view),
                         },
                         wgpu::BindGroupEntry {
                             binding: 3,
-                            resource: wgpu::BindingResource::Sampler(&self.shadow_sampler),
+                            resource: wgpu::BindingResource::Sampler(&shadow_sampler),
                         },
                     ],
                     label: None,
@@ -686,12 +618,12 @@ impl RenderPass for ShadowRenderer {
                     label: Some("main"),
                     layout: Some(&pipeline_layout),
                     vertex: wgpu::VertexState {
-                        module: &self.shader,
+                        module: &shader,
                         entry_point: "vs_main",
                         buffers: &[Self::VB_DESC],
                     },
                     fragment: Some(wgpu::FragmentState {
-                        module: &self.shader,
+                        module: &shader,
                         entry_point: if Self::supports_storage_resources(&adapter, &device) {
                             "fs_main"
                         } else {
@@ -719,20 +651,84 @@ impl RenderPass for ShadowRenderer {
                     bind_group,
                     uniform_buf,
                 }
-            });
-        }
+            },
+        ));
 
-        if config.width != self.prev_width || config.height != self.prev_height {
+        ShadowRenderer {
+            entities,
+            lights,
+            light_storage_buf,
+            lights_are_dirty: true,
+            shadow_pass,
+            entity_uniform_buf,
+            entity_bind_group,
+            forward_pass,
+            forward_depth: None,
+            prev_width: Default::default(),
+            prev_height: Default::default(),
+        }
+    }
+    fn generate_matrix(aspect_ratio: f32) -> cgmath::Matrix4<f32> {
+        let mx_projection = cgmath::perspective(cgmath::Deg(45f32), aspect_ratio, 1.0, 20.0);
+        let mx_view = cgmath::Matrix4::look_at_rh(
+            cgmath::Point3::new(3.0f32, -10.0, 6.0),
+            cgmath::Point3::new(0f32, 0.0, 0.0),
+            cgmath::Vector3::unit_z(),
+        );
+        let mx_correction = OPENGL_TO_WGPU_MATRIX;
+        mx_correction * mx_projection * mx_view
+    }
+
+    fn create_depth_texture(
+        config: &wgpu::SurfaceConfiguration,
+        device: &wgpu::Device,
+    ) -> wgpu::TextureView {
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            label: None,
+        });
+
+        depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+}
+
+impl RenderPass for ShadowRenderer {
+    fn render(
+        &mut self,
+        wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        config: &wgpu::SurfaceConfiguration,
+    ) {
+        let device = wgpu_manager.device();
+        let queue = wgpu_manager.queue();
+
+        if self.forward_depth.is_none()
+            || config.width != self.prev_width
+            || config.height != self.prev_height
+        {
             // update view-projection matrix
             let mx_total = Self::generate_matrix(config.width as f32 / config.height as f32);
             let mx_ref: &[f32; 16] = mx_total.as_ref();
             queue.write_buffer(
-                &self.forward_pass.as_ref().unwrap().uniform_buf,
+                &self
+                    .forward_pass
+                    .get((device.clone(), config.format))
+                    .uniform_buf,
                 0,
                 bytemuck::cast_slice(mx_ref),
             );
 
-            self.forward_depth = Some(Self::create_depth_texture(config, device));
+            self.forward_depth = Some(Self::create_depth_texture(config, &device));
         }
 
         // update uniforms
@@ -816,7 +812,7 @@ impl RenderPass for ShadowRenderer {
 
         // forward pass
         let forward_depth = self.forward_depth.as_ref().unwrap();
-        let forward_pass = self.forward_pass.as_ref().unwrap();
+        let forward_pass = self.forward_pass.get((device, config.format));
 
         encoder.push_debug_group("forward rendering pass");
         {

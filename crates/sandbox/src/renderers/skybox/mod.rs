@@ -1,6 +1,9 @@
+use std::rc::Rc;
+
 use antigen_wgpu::{RenderPass, WgpuManager};
 use cgmath::SquareMatrix;
-use wgpu::{util::DeviceExt, PipelineLayout, RenderPipeline, ShaderModule};
+use lazy::Lazy;
+use wgpu::{util::DeviceExt, TextureFormat, Device};
 
 #[rustfmt::skip]
 #[allow(unused)]
@@ -64,23 +67,18 @@ impl Camera {
 }
 
 pub struct SkyboxRenderer {
-    surface_entity: legion::Entity,
     camera: Camera,
-    shader: ShaderModule,
     bind_group: wgpu::BindGroup,
     uniform_buf: wgpu::Buffer,
-    pipeline_layout: PipelineLayout,
     entities: Vec<Entity>,
-    sky_pipeline: Option<wgpu::RenderPipeline>,
-    entity_pipeline: Option<wgpu::RenderPipeline>,
+    pipelines: Lazy<(wgpu::RenderPipeline, wgpu::RenderPipeline), (Rc<Device>, TextureFormat)>,
     depth_view: Option<wgpu::TextureView>,
-    staging_belt: wgpu::util::StagingBelt,
 }
 
 impl SkyboxRenderer {
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24Plus;
 
-    pub fn new(wgpu_manager: &WgpuManager, surface_entity: legion::Entity) -> Self {
+    pub fn new(wgpu_manager: &WgpuManager) -> Self {
         let device = wgpu_manager.device();
         let queue = wgpu_manager.queue();
 
@@ -238,7 +236,7 @@ impl SkyboxRenderer {
         let image = ddsfile::Dds::read(&mut std::io::Cursor::new(&bytes)).unwrap();
 
         let texture = device.create_texture_with_data(
-            queue,
+            &queue,
             &wgpu::TextureDescriptor {
                 size,
                 mip_level_count: max_mips as u32,
@@ -275,18 +273,80 @@ impl SkyboxRenderer {
             label: None,
         });
 
+        let pipelines = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                // Create the render pipelines
+                let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Sky"),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: "vs_sky",
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: "fs_sky",
+                        targets: &[format.clone().into()],
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        front_face: wgpu::FrontFace::Cw,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: Self::DEPTH_FORMAT,
+                        depth_write_enabled: false,
+                        depth_compare: wgpu::CompareFunction::LessEqual,
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState::default(),
+                });
+
+                let entity_pipeline = device.create_render_pipeline(
+                &wgpu::RenderPipelineDescriptor {
+                    label: Some("Entity"),
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: "vs_entity",
+                        buffers: &[wgpu::VertexBufferLayout {
+                            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
+                        }],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: "fs_entity",
+                        targets: &[format.into()],
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        front_face: wgpu::FrontFace::Cw,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: Self::DEPTH_FORMAT,
+                        depth_write_enabled: true,
+                        depth_compare: wgpu::CompareFunction::LessEqual,
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    multisample: wgpu::MultisampleState::default(),
+                },
+            );
+
+                (sky_pipeline, entity_pipeline)
+            },
+        ));
+
         SkyboxRenderer {
-            surface_entity,
             camera,
             bind_group,
             uniform_buf,
-            shader,
-            pipeline_layout,
-            sky_pipeline: None,
-            entity_pipeline: None,
+            pipelines,
             entities,
             depth_view: None,
-            staging_belt: wgpu::util::StagingBelt::new(0x100),
         }
     }
 
@@ -315,89 +375,19 @@ impl SkyboxRenderer {
 impl RenderPass for SkyboxRenderer {
     fn render(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        format: wgpu::ColorTargetState,
+        config: &wgpu::SurfaceConfiguration,
     ) {
         let device = wgpu_manager.device();
-        let config = wgpu_manager
-            .surface_configuration(&self.surface_entity)
-            .unwrap();
+        let queue = wgpu_manager.queue();
 
-        if self.sky_pipeline.is_none() {
-            // Create the render pipelines
-            self.sky_pipeline = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("Sky"),
-                    layout: Some(&self.pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &self.shader,
-                        entry_point: "vs_sky",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.shader,
-                        entry_point: "fs_sky",
-                        targets: &[config.format.into()],
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        front_face: wgpu::FrontFace::Cw,
-                        ..Default::default()
-                    },
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: Self::DEPTH_FORMAT,
-                        depth_write_enabled: false,
-                        depth_compare: wgpu::CompareFunction::LessEqual,
-                        stencil: wgpu::StencilState::default(),
-                        bias: wgpu::DepthBiasState::default(),
-                    }),
-                    multisample: wgpu::MultisampleState::default(),
-                },
-            ));
-        }
-
-        if self.entity_pipeline.is_none() {
-            self.entity_pipeline = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("Entity"),
-                    layout: Some(&self.pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &self.shader,
-                        entry_point: "vs_entity",
-                        buffers: &[wgpu::VertexBufferLayout {
-                            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3],
-                        }],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.shader,
-                        entry_point: "fs_entity",
-                        targets: &[config.format.into()],
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        front_face: wgpu::FrontFace::Cw,
-                        ..Default::default()
-                    },
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: Self::DEPTH_FORMAT,
-                        depth_write_enabled: true,
-                        depth_compare: wgpu::CompareFunction::LessEqual,
-                        stencil: wgpu::StencilState::default(),
-                        bias: wgpu::DepthBiasState::default(),
-                    }),
-                    multisample: wgpu::MultisampleState::default(),
-                },
-            ));
-        }
-
-        if self.depth_view.is_none() {
-            self.depth_view = Some(Self::create_depth_texture(config, device));
-        }
-
-        if config.width != self.camera.screen_size.0 || config.height != self.camera.screen_size.1 {
-            self.depth_view = Some(Self::create_depth_texture(config, device));
+        if self.depth_view.is_none()
+            || config.width != self.camera.screen_size.0
+            || config.height != self.camera.screen_size.1
+        {
+            self.depth_view = Some(Self::create_depth_texture(config, &device));
 
             self.camera.screen_size.0 = config.width;
             self.camera.screen_size.1 = config.height;
@@ -405,21 +395,10 @@ impl RenderPass for SkyboxRenderer {
 
         // update rotation
         let raw_uniforms = self.camera.to_uniform_data();
-        self.staging_belt
-            .write_buffer(
-                encoder,
-                &self.uniform_buf,
-                0,
-                wgpu::BufferSize::new((raw_uniforms.len() * 4) as wgpu::BufferAddress).unwrap(),
-                device,
-            )
-            .copy_from_slice(bytemuck::cast_slice(&raw_uniforms));
+        queue.write_buffer(&self.uniform_buf, 0, bytemuck::cast_slice(&raw_uniforms));
 
-        self.staging_belt.finish();
-
+        let (sky_pipeline, entity_pipeline) = self.pipelines.get((device, config.format));
         let depth_view = self.depth_view.as_ref().unwrap();
-        let entity_pipeline = self.entity_pipeline.as_ref().unwrap();
-        let sky_pipeline = self.sky_pipeline.as_ref().unwrap();
 
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -458,8 +437,5 @@ impl RenderPass for SkyboxRenderer {
             rpass.set_pipeline(sky_pipeline);
             rpass.draw(0..3, 0..1);
         }
-
-        let belt_future = self.staging_belt.recall();
-        //spawner.spawn_local(belt_future);
     }
 }

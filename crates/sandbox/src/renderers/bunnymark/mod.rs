@@ -1,6 +1,8 @@
+use std::rc::Rc;
+
 use antigen_wgpu::{RenderPass, WgpuManager};
-use legion::Entity;
-use wgpu::{util::DeviceExt, PipelineLayout, RenderPipeline, ShaderModule};
+use lazy::Lazy;
+use wgpu::{util::DeviceExt, TextureFormat, Device};
 
 const MAX_BUNNIES: usize = 1 << 20;
 const BUNNY_SIZE: f32 = 0.15 * 256.0;
@@ -25,12 +27,9 @@ struct Locals {
 }
 
 pub struct BunnymarkRenderer {
-    surface_entity: Entity,
     global_group: wgpu::BindGroup,
     local_group: wgpu::BindGroup,
-    pipeline_layout: wgpu::PipelineLayout,
-    shader: wgpu::ShaderModule,
-    pipeline: Option<wgpu::RenderPipeline>,
+    pipeline: Lazy<wgpu::RenderPipeline, (Rc<Device>, TextureFormat)>,
     bunnies: Vec<Locals>,
     local_buffer: wgpu::Buffer,
     global_buffer: wgpu::Buffer,
@@ -38,7 +37,7 @@ pub struct BunnymarkRenderer {
 }
 
 impl BunnymarkRenderer {
-    pub fn new(wgpu_manager: &WgpuManager, surface_entity: Entity) -> Self {
+    pub fn new(wgpu_manager: &WgpuManager) -> Self {
         let device = wgpu_manager.device();
         let queue = wgpu_manager.queue();
 
@@ -105,6 +104,35 @@ impl BunnymarkRenderer {
             bind_group_layouts: &[&global_bind_group_layout, &local_bind_group_layout],
             push_constant_ranges: &[],
         });
+
+        let pipeline = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: "vs_main",
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: "fs_main",
+                        targets: &[wgpu::ColorTargetState {
+                            format,
+                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::default(),
+                        }],
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                        ..wgpu::PrimitiveState::default()
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                })
+            },
+        ));
 
         let texture = {
             let img_data = include_bytes!("logo.png");
@@ -204,14 +232,24 @@ impl BunnymarkRenderer {
             label: None,
         });
 
+        let mut bunnies = vec![];
+        let spawn_count = 64;
+        let color = rand::random::<u32>();
+        for _ in 0..spawn_count {
+            let speed = rand::random::<f32>() * MAX_VELOCITY - (MAX_VELOCITY * 0.5);
+            bunnies.push(Locals {
+                position: [0.0, 0.0],
+                velocity: [speed, speed],
+                color,
+                _pad: 0,
+            });
+        }
+
         BunnymarkRenderer {
-            surface_entity,
             global_group,
             local_group,
-            pipeline_layout,
-            shader,
-            pipeline: None,
-            bunnies: Vec::new(),
+            pipeline,
+            bunnies,
             local_buffer,
             global_buffer,
             extent: [0, 0],
@@ -222,57 +260,13 @@ impl BunnymarkRenderer {
 impl RenderPass for BunnymarkRenderer {
     fn render(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        format: wgpu::ColorTargetState,
+        config: &wgpu::SurfaceConfiguration,
     ) {
         let device = wgpu_manager.device();
         let queue = wgpu_manager.queue();
-        let config = wgpu_manager
-            .surface_configuration(&self.surface_entity)
-            .unwrap();
-
-        if self.pipeline.is_none() {
-            self.pipeline = Some(
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: None,
-                    layout: Some(&self.pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &self.shader,
-                        entry_point: "vs_main",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.shader,
-                        entry_point: "fs_main",
-                        targets: &[wgpu::ColorTargetState {
-                            format: format.format,
-                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                            write_mask: wgpu::ColorWrites::default(),
-                        }],
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        topology: wgpu::PrimitiveTopology::TriangleStrip,
-                        ..wgpu::PrimitiveState::default()
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                }),
-            );
-
-            let spawn_count = 64 + self.bunnies.len() / 2;
-            let color = rand::random::<u32>();
-            for _ in 0..spawn_count {
-                let speed = rand::random::<f32>() * MAX_VELOCITY - (MAX_VELOCITY * 0.5);
-                self.bunnies.push(Locals {
-                    position: [0.0, 0.5 * (self.extent[1] as f32)],
-                    velocity: [speed, 0.0],
-                    color,
-                    _pad: 0,
-                });
-            }
-        }
 
         if config.width != self.extent[0] || config.height != self.extent[1] {
             let globals = Globals {
@@ -319,8 +313,6 @@ impl RenderPass for BunnymarkRenderer {
             )
         });
 
-        let pipeline = self.pipeline.as_ref().unwrap();
-
         {
             let clear_color = wgpu::Color {
                 r: 0.1,
@@ -340,7 +332,7 @@ impl RenderPass for BunnymarkRenderer {
                 }],
                 depth_stencil_attachment: None,
             });
-            rpass.set_pipeline(pipeline);
+            rpass.set_pipeline(self.pipeline.get((device, config.format)));
             rpass.set_bind_group(0, &self.global_group, &[]);
             for i in 0..self.bunnies.len() {
                 let offset =

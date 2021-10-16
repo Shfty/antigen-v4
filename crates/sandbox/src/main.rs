@@ -41,7 +41,6 @@ use std::{
     time::{Duration, Instant},
 };
 use wgpu::SurfaceTexture;
-use winit::window::WindowId;
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopWindowTarget},
@@ -83,7 +82,7 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // Cube renderer
     let cube_render_entity = world.push(());
 
-    let cube_renderer = CubeRenderer::new(wgpu_manager, cube_render_entity);
+    let cube_renderer = CubeRenderer::new(wgpu_manager);
     let cube_render_state_component =
         CubeRenderStateComponent::from(cube_renderer.take_state_handle());
     let cube_pass_id = wgpu_manager.add_render_pass(Box::new(cube_renderer));
@@ -104,10 +103,8 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // MSAA lines renderer
     let msaa_lines_render_entity = world.push(());
 
-    let msaa_lines_pass_id = wgpu_manager.add_render_pass(Box::new(MsaaLinesRenderer::new(
-        &wgpu_manager,
-        msaa_lines_render_entity,
-    )));
+    let msaa_lines_pass_id =
+        wgpu_manager.add_render_pass(Box::new(MsaaLinesRenderer::new(&wgpu_manager)));
 
     let mut msaa_lines_pass_component = RenderPassComponent::default();
     msaa_lines_pass_component.add_render_pass(msaa_lines_pass_id);
@@ -141,9 +138,8 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // Conservative raster renderer
     let conservative_raster_pass_entity = world.push(());
 
-    let conservative_raster_pass_id = wgpu_manager.add_render_pass(Box::new(
-        ConservativeRasterRenderer::new(&wgpu_manager, conservative_raster_pass_entity),
-    ));
+    let conservative_raster_pass_id =
+        wgpu_manager.add_render_pass(Box::new(ConservativeRasterRenderer::new(&wgpu_manager)));
 
     let mut conservative_raster_pass_component = RenderPassComponent::default();
     conservative_raster_pass_component.add_render_pass(conservative_raster_pass_id);
@@ -160,10 +156,7 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // Cube renderer
     let mipmap_render_entity = world.push(());
 
-    let mipmap_pass_id = wgpu_manager.add_render_pass(Box::new(MipmapRenderer::new(
-        wgpu_manager,
-        mipmap_render_entity,
-    )));
+    let mipmap_pass_id = wgpu_manager.add_render_pass(Box::new(MipmapRenderer::new(wgpu_manager)));
 
     let mut mipmap_pass_component = RenderPassComponent::default();
     mipmap_pass_component.add_render_pass(mipmap_pass_id);
@@ -193,10 +186,7 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // Shadow renderer
     let shadow_render_entity = world.push(());
 
-    let shadow_pass_id = wgpu_manager.add_render_pass(Box::new(ShadowRenderer::new(
-        &wgpu_manager,
-        shadow_render_entity,
-    )));
+    let shadow_pass_id = wgpu_manager.add_render_pass(Box::new(ShadowRenderer::new(&wgpu_manager)));
     let mut shadow_pass_component = RenderPassComponent::default();
     shadow_pass_component.add_render_pass(shadow_pass_id);
 
@@ -212,10 +202,8 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // Bunnymark renderer
     let bunnymark_render_entity = world.push(());
 
-    let bunnymark_pass_id = wgpu_manager.add_render_pass(Box::new(BunnymarkRenderer::new(
-        &wgpu_manager,
-        bunnymark_render_entity,
-    )));
+    let bunnymark_pass_id =
+        wgpu_manager.add_render_pass(Box::new(BunnymarkRenderer::new(&wgpu_manager)));
     let mut bunnymark_pass_component = RenderPassComponent::default();
     bunnymark_pass_component.add_render_pass(bunnymark_pass_id);
 
@@ -230,10 +218,7 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
 
     // Skybox renderer
     let skybox_pass_entity = world.push(());
-    let skybox_pass_id = wgpu_manager.add_render_pass(Box::new(SkyboxRenderer::new(
-        &wgpu_manager,
-        skybox_pass_entity,
-    )));
+    let skybox_pass_id = wgpu_manager.add_render_pass(Box::new(SkyboxRenderer::new(&wgpu_manager)));
 
     let mut skybox_pass_component = RenderPassComponent::default();
     skybox_pass_component.add_render_pass(skybox_pass_id);
@@ -250,10 +235,7 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     // Water renderer
     let water_pass_entity = world.push(());
 
-    let water_pass_id = wgpu_manager.add_render_pass(Box::new(WaterRenderer::new(
-        &wgpu_manager,
-        water_pass_entity,
-    )));
+    let water_pass_id = wgpu_manager.add_render_pass(Box::new(WaterRenderer::new(&wgpu_manager)));
 
     let mut water_pass_component = RenderPassComponent::default();
     water_pass_component.add_render_pass(water_pass_id);
@@ -531,7 +513,7 @@ fn winit_thread<'a>(
                             return None;
                         };
 
-                        redraw_window(&wgpu_responder, entity, &mut encoder, &surface, &frame);
+                        redraw_window(&wgpu_responder, &entity, &mut encoder, &frame);
 
                         Some(frame)
                     })
@@ -574,7 +556,7 @@ fn winit_thread<'a>(
                     return;
                 };
 
-                redraw_window(&wgpu_responder, entity, &mut encoder, &surface, &frame);
+                redraw_window(&wgpu_responder, &entity, &mut encoder, &frame);
 
                 wgpu_responder
                     .queue()
@@ -624,23 +606,20 @@ fn winit_thread<'a>(
 
 fn redraw_window(
     wgpu_responder: &WgpuResponder,
-    entity: Entity,
+    entity: &Entity,
     encoder: &mut wgpu::CommandEncoder,
-    surface: &wgpu::Surface,
     frame: &SurfaceTexture,
 ) {
     if let Some(render_passes) = wgpu_responder.entity_render_passes(&entity) {
-        let format = surface
-            .get_preferred_format(wgpu_responder.adapter())
-            .unwrap();
-
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
+        let config = wgpu_responder.surface_configuration(entity).unwrap();
+
         for render_pass_id in render_passes.iter() {
             for render_pass in wgpu_responder.render_passes().get_mut(render_pass_id) {
-                render_pass.render(encoder, &wgpu_responder, &view, format.into());
+                render_pass.render(&wgpu_responder, encoder, &view, config);
             }
         }
     }

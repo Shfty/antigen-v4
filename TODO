@@ -1,10 +1,20 @@
 * antigen-wgpu
-    [ ] Refactor to use cube renderer approach
+    [✓] Refactor to use cube renderer approach
         Currently trying to store pass-private data generally (bind groups, pipelines)
         Instead, client code should own it
         Remove pipelines and bind groups from WgpuManager storage
         Reimplement cube, triangle renderers as structs w/Renderer trait
         Expose buffer IDs in state struct so ECS can modify via request
+    [✓] Create lazy-loading abstraction to ease renderer implementation
+    [>] Pass surface config instead of format to reduce entity id passing
+    [ ] Support staging buffer for data uploads
+        Need to recall after the encoder is submitted
+        Separate codepath for renderers that need control over the encoder?
+            Redraw mode enum in window component?
+                Always redraw / shared encoder
+                Always redraw / own encoder
+                Always redraw / request? (Call request_redraw at end of MainEventsCleared)
+                Redraw on request
 
 * antigen-hid
     [ ] Integrate with sandbox

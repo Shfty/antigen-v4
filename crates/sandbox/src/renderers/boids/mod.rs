@@ -1,11 +1,11 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, rc::Rc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
-use legion::Entity;
+use lazy::Lazy;
 use rand::{prelude::Distribution, SeedableRng};
 use wgpu::{
-    util::DeviceExt, BindGroup, Buffer, ComputePipeline, PipelineLayout, RenderPipeline,
-    ShaderModule, ShaderModuleDescriptor, ShaderSource,
+    util::DeviceExt, BindGroup, Buffer, ComputePipeline, Device, RenderPipeline,
+    ShaderModuleDescriptor, ShaderSource, TextureFormat,
 };
 
 // number of boid particles to simulate
@@ -14,15 +14,12 @@ const NUM_PARTICLES: u32 = 1500;
 // number of single-particle calculations (invocations) in each gpu work group
 const PARTICLES_PER_GROUP: u32 = 64;
 
-#[derive(Debug)]
 pub struct BoidsRenderer {
     particle_bind_groups: Vec<BindGroup>,
     particle_buffers: Vec<Buffer>,
     vertices_buffer: Buffer,
     compute_pipeline: ComputePipeline,
-    render_pipeline_layout: PipelineLayout,
-    render_pipeline: Option<RenderPipeline>,
-    draw_shader: ShaderModule,
+    render_pipeline: Lazy<RenderPipeline, (Rc<Device>, TextureFormat)>,
     work_group_count: u32,
     frame_num: usize,
 }
@@ -112,6 +109,39 @@ impl BoidsRenderer {
                 push_constant_ranges: &[],
             });
 
+        let render_pipeline = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: None,
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &draw_shader,
+                entry_point: "main",
+                buffers: &[
+                    wgpu::VertexBufferLayout {
+                        array_stride: 4 * 4,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
+                    },
+                    wgpu::VertexBufferLayout {
+                        array_stride: 2 * 4,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![2 => Float32x2],
+                    },
+                ],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &draw_shader,
+                entry_point: "main",
+                targets: &[format.into()],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+        })
+            },
+        ));
+
         // create compute pipeline
         let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Compute pipeline"),
@@ -188,9 +218,7 @@ impl BoidsRenderer {
             particle_buffers,
             vertices_buffer,
             compute_pipeline,
-            render_pipeline_layout,
-            render_pipeline: None,
-            draw_shader,
+            render_pipeline,
             work_group_count,
             frame_num: 0,
         }
@@ -200,43 +228,11 @@ impl BoidsRenderer {
 impl RenderPass for BoidsRenderer {
     fn render(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        format: wgpu::ColorTargetState,
+        config: &wgpu::SurfaceConfiguration,
     ) {
-        if self.render_pipeline.is_none() {
-            let device = wgpu_manager.device();
-            self.render_pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&self.render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &self.draw_shader,
-                entry_point: "main",
-                buffers: &[
-                    wgpu::VertexBufferLayout {
-                        array_stride: 4 * 4,
-                        step_mode: wgpu::VertexStepMode::Instance,
-                        attributes: &wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2],
-                    },
-                    wgpu::VertexBufferLayout {
-                        array_stride: 2 * 4,
-                        step_mode: wgpu::VertexStepMode::Vertex,
-                        attributes: &wgpu::vertex_attr_array![2 => Float32x2],
-                    },
-                ],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &self.draw_shader,
-                entry_point: "main",
-                targets: &[format.into()],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-        }));
-        }
-
         // create render pass descriptor and its color attachments
         let color_attachments = [wgpu::RenderPassColorAttachment {
             view,
@@ -252,7 +248,9 @@ impl RenderPass for BoidsRenderer {
             depth_stencil_attachment: None,
         };
 
-        let render_pipeline = self.render_pipeline.as_ref().unwrap();
+        let render_pipeline = self
+            .render_pipeline
+            .get((wgpu_manager.device(), config.format));
 
         encoder.push_debug_group("compute boid movement");
         {

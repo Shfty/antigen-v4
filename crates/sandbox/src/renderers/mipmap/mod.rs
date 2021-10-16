@@ -1,8 +1,8 @@
-use std::num::NonZeroU32;
+use std::{num::{NonZeroU32, NonZeroU8}, rc::Rc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
-use legion::Entity;
-use wgpu::{util::DeviceExt, PipelineLayout, RenderPipeline, Sampler, ShaderModule, TextureView};
+use lazy::Lazy;
+use wgpu::{util::DeviceExt, Device, TextureFormat};
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const MIP_LEVEL_COUNT: u32 = 9;
@@ -39,24 +39,16 @@ fn pipeline_statistics_offset() -> wgpu::BufferAddress {
         .max(wgpu::QUERY_RESOLVE_BUFFER_ALIGNMENT)
 }
 
-#[derive(Debug)]
 pub struct MipmapRenderer {
-    surface_entity: Entity,
-
-    uniform_buf: wgpu::Buffer,
-    draw_shader: ShaderModule,
-    texture_view: TextureView,
-    sampler: Sampler,
-
-    bind_group: Option<wgpu::BindGroup>,
-    draw_pipeline: Option<wgpu::RenderPipeline>,
+    uniform_buf: Rc<wgpu::Buffer>,
+    draw_pipeline: Lazy<(wgpu::RenderPipeline, wgpu::BindGroup), (Rc<Device>, TextureFormat)>,
 
     prev_width: u32,
     prev_height: u32,
 }
 
 impl MipmapRenderer {
-    pub fn new(wgpu_manager: &WgpuManager, surface_entity: Entity) -> Self {
+    pub fn new(wgpu_manager: &WgpuManager) -> Self {
         let device = wgpu_manager.device();
         let queue = wgpu_manager.queue();
 
@@ -109,19 +101,22 @@ impl MipmapRenderer {
             address_mode_u: wgpu::AddressMode::Repeat,
             address_mode_v: wgpu::AddressMode::Repeat,
             address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
+            mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Linear,
             mipmap_filter: wgpu::FilterMode::Linear,
+            anisotropy_clamp: NonZeroU8::new(16),
             ..Default::default()
         });
 
         let mx_total = Self::generate_matrix(1.0);
         let mx_ref: &[f32; 16] = mx_total.as_ref();
-        let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(mx_ref),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
+        let uniform_buf = Rc::new(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Uniform Buffer"),
+                contents: bytemuck::cast_slice(mx_ref),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            }),
+        );
 
         // Create the render pipeline
         let draw_shader = device.create_shader_module(&wgpu::ShaderModuleDescriptor {
@@ -179,7 +174,7 @@ impl MipmapRenderer {
 
         Self::generate_mipmaps(
             &mut init_encoder,
-            device,
+            &device,
             &texture,
             &query_sets,
             MIP_LEVEL_COUNT,
@@ -228,14 +223,62 @@ impl MipmapRenderer {
             }
         }
 
+        let ub = uniform_buf.clone();
+        let draw_pipeline = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                let draw_pipeline =
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("draw"),
+                        layout: None,
+                        vertex: wgpu::VertexState {
+                            module: &draw_shader,
+                            entry_point: "vs_main",
+                            buffers: &[],
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &draw_shader,
+                            entry_point: "fs_main",
+                            targets: &[format.into()],
+                        }),
+                        primitive: wgpu::PrimitiveState {
+                            topology: wgpu::PrimitiveTopology::TriangleStrip,
+                            front_face: wgpu::FrontFace::Ccw,
+                            cull_mode: Some(wgpu::Face::Back),
+                            ..Default::default()
+                        },
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState::default(),
+                    });
+
+                // Create bind group
+                let bind_group_layout = draw_pipeline.get_bind_group_layout(0);
+
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: ub.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&texture_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&sampler),
+                        },
+                    ],
+                    label: None,
+                });
+
+                (draw_pipeline, bind_group)
+            },
+        ));
+
         MipmapRenderer {
-            surface_entity,
+            draw_pipeline,
             uniform_buf,
-            draw_shader,
-            texture_view,
-            sampler,
-            bind_group: None,
-            draw_pipeline: None,
             prev_width: Default::default(),
             prev_height: Default::default(),
         }
@@ -404,63 +447,13 @@ impl MipmapRenderer {
 impl RenderPass for MipmapRenderer {
     fn render(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        format: wgpu::ColorTargetState,
+        config: &wgpu::SurfaceConfiguration,
     ) {
         let device = wgpu_manager.device();
         let queue = wgpu_manager.queue();
-
-        let config = wgpu_manager.surface_configuration(&self.surface_entity).unwrap();
-
-        if self.draw_pipeline.is_none() || self.bind_group.is_none() {
-            let draw_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("draw"),
-                layout: None,
-                vertex: wgpu::VertexState {
-                    module: &self.draw_shader,
-                    entry_point: "vs_main",
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &self.draw_shader,
-                    entry_point: "fs_main",
-                    targets: &[format.into()],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    front_face: wgpu::FrontFace::Ccw,
-                    cull_mode: Some(wgpu::Face::Back),
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-            });
-
-            // Create bind group
-            let bind_group_layout = draw_pipeline.get_bind_group_layout(0);
-            self.draw_pipeline = Some(draw_pipeline);
-
-            self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniform_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&self.texture_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                ],
-                label: None,
-            }));
-        }
 
         if config.width != self.prev_width || config.width != self.prev_height {
             let mx_total = Self::generate_matrix(config.width as f32 / config.height as f32);
@@ -471,8 +464,7 @@ impl RenderPass for MipmapRenderer {
             self.prev_height = config.height;
         }
 
-        let draw_pipeline = self.draw_pipeline.as_ref().unwrap();
-        let bind_group = self.bind_group.as_ref().unwrap();
+        let (draw_pipeline, bind_group) = self.draw_pipeline.get((device, config.format));
 
         let clear_color = wgpu::Color {
             r: 0.1,
@@ -492,8 +484,8 @@ impl RenderPass for MipmapRenderer {
             }],
             depth_stencil_attachment: None,
         });
-        rpass.set_pipeline(&draw_pipeline);
-        rpass.set_bind_group(0, &bind_group, &[]);
+        rpass.set_pipeline(draw_pipeline);
+        rpass.set_bind_group(0, bind_group, &[]);
         rpass.draw(0..4, 0..1);
     }
 }

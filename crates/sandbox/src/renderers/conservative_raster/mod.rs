@@ -1,31 +1,21 @@
-use std::borrow::Cow;
+use std::{borrow::Cow, rc::Rc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
-use legion::Entity;
+use lazy::Lazy;
 use wgpu::{
-    BindGroup, BindGroupLayout, PipelineLayout, PipelineLayoutDescriptor, RenderPipeline,
-    ShaderModule, ShaderModuleDescriptor, TextureFormat, TextureView,
+    BindGroup, BindGroupLayout, Device, PipelineLayoutDescriptor, RenderPipeline,
+    ShaderModuleDescriptor, TextureFormat, TextureView,
 };
 
 const RENDER_TARGET_FORMAT: TextureFormat = TextureFormat::Rgba8UnormSrgb;
 
-#[derive(Debug)]
 pub struct ConservativeRasterRenderer {
-    surface_entity: Entity,
-
     low_res_target: Option<TextureView>,
     bind_group_upscale: Option<BindGroup>,
 
-    pipeline_layout_empty: PipelineLayout,
-    pipeline_layout_upscale: PipelineLayout,
-
-    shader_triangle_and_lines: ShaderModule,
-    shader_upscale: ShaderModule,
-
-    pipeline_triangle_conservative: Option<RenderPipeline>,
-    pipeline_triangle_regular: Option<RenderPipeline>,
-    pipeline_upscale: Option<RenderPipeline>,
-    pipeline_lines: Option<RenderPipeline>,
+    pipelines_triangle:
+        Lazy<(RenderPipeline, RenderPipeline, Option<RenderPipeline>), (Rc<Device>, TextureFormat)>,
+    pipeline_upscale: Lazy<RenderPipeline, (Rc<Device>, TextureFormat)>,
 
     bind_group_layout_upscale: BindGroupLayout,
 
@@ -34,7 +24,7 @@ pub struct ConservativeRasterRenderer {
 }
 
 impl ConservativeRasterRenderer {
-    pub fn new(wgpu_manager: &WgpuManager, surface_entity: Entity) -> Self {
+    pub fn new(wgpu_manager: &WgpuManager) -> Self {
         let device = wgpu_manager.device();
 
         let pipeline_layout_empty = device.create_pipeline_layout(&PipelineLayoutDescriptor {
@@ -49,6 +39,82 @@ impl ConservativeRasterRenderer {
                 "triangle_and_lines.wgsl"
             ))),
         });
+
+        let pipelines = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                let pipeline_conservative =
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("Conservative Rasterization"),
+                        layout: Some(&pipeline_layout_empty),
+                        vertex: wgpu::VertexState {
+                            module: &shader_triangle_and_lines,
+                            entry_point: "vs_main",
+                            buffers: &[],
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &shader_triangle_and_lines,
+                            entry_point: "fs_main_red",
+                            targets: &[RENDER_TARGET_FORMAT.into()],
+                        }),
+                        primitive: wgpu::PrimitiveState {
+                            conservative: true,
+                            ..Default::default()
+                        },
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState::default(),
+                    });
+                let pipeline_regular =
+                    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("Regular Rasterization"),
+                        layout: Some(&pipeline_layout_empty),
+                        vertex: wgpu::VertexState {
+                            module: &shader_triangle_and_lines,
+                            entry_point: "vs_main",
+                            buffers: &[],
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &shader_triangle_and_lines,
+                            entry_point: "fs_main_blue",
+                            targets: &[RENDER_TARGET_FORMAT.into()],
+                        }),
+                        primitive: wgpu::PrimitiveState::default(),
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState::default(),
+                    });
+                let pipeline_lines = if device
+                    .features()
+                    .contains(wgpu::Features::POLYGON_MODE_LINE)
+                {
+                    Some(
+                        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                            label: Some("Lines"),
+                            layout: Some(&pipeline_layout_empty),
+                            vertex: wgpu::VertexState {
+                                module: &shader_triangle_and_lines,
+                                entry_point: "vs_main",
+                                buffers: &[],
+                            },
+                            fragment: Some(wgpu::FragmentState {
+                                module: &shader_triangle_and_lines,
+                                entry_point: "fs_main_white",
+                                targets: &[format.clone().into()],
+                            }),
+                            primitive: wgpu::PrimitiveState {
+                                polygon_mode: wgpu::PolygonMode::Line,
+                                topology: wgpu::PrimitiveTopology::LineStrip,
+                                ..Default::default()
+                            },
+                            depth_stencil: None,
+                            multisample: wgpu::MultisampleState::default(),
+                        }),
+                    )
+                } else {
+                    None
+                };
+
+                (pipeline_conservative, pipeline_regular, pipeline_lines)
+            },
+        ));
 
         let bind_group_layout_upscale =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -86,22 +152,34 @@ impl ConservativeRasterRenderer {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("upscale.wgsl"))),
         });
 
+        let pipeline_upscale = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("Upscale"),
+                    layout: Some(&pipeline_layout_upscale),
+                    vertex: wgpu::VertexState {
+                        module: &shader_upscale,
+                        entry_point: "vs_main",
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader_upscale,
+                        entry_point: "fs_main",
+                        targets: &[format.into()],
+                    }),
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                })
+            },
+        ));
+
         ConservativeRasterRenderer {
-            surface_entity,
-
-            pipeline_layout_empty,
-            pipeline_layout_upscale,
-
-            shader_triangle_and_lines,
-            shader_upscale,
-
             low_res_target: None,
             bind_group_upscale: None,
 
-            pipeline_triangle_conservative: None,
-            pipeline_triangle_regular: None,
-            pipeline_upscale: None,
-            pipeline_lines: None,
+            pipelines_triangle: pipelines,
+            pipeline_upscale,
             bind_group_layout_upscale,
 
             prev_width: Default::default(),
@@ -160,115 +238,12 @@ impl ConservativeRasterRenderer {
 impl RenderPass for ConservativeRasterRenderer {
     fn render(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
         view: &TextureView,
-        format: wgpu::ColorTargetState,
+        config: &wgpu::SurfaceConfiguration,
     ) {
         let device = wgpu_manager.device();
-
-        let config = wgpu_manager
-            .surface_configuration(&self.surface_entity)
-            .unwrap();
-
-        if self.pipeline_triangle_conservative.is_none() {
-            self.pipeline_triangle_conservative = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("Conservative Rasterization"),
-                    layout: Some(&self.pipeline_layout_empty),
-                    vertex: wgpu::VertexState {
-                        module: &self.shader_triangle_and_lines,
-                        entry_point: "vs_main",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.shader_triangle_and_lines,
-                        entry_point: "fs_main_red",
-                        targets: &[RENDER_TARGET_FORMAT.into()],
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        conservative: true,
-                        ..Default::default()
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                },
-            ));
-        }
-
-        if self.pipeline_triangle_regular.is_none() {
-            self.pipeline_triangle_regular = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("Regular Rasterization"),
-                    layout: Some(&self.pipeline_layout_empty),
-                    vertex: wgpu::VertexState {
-                        module: &self.shader_triangle_and_lines,
-                        entry_point: "vs_main",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.shader_triangle_and_lines,
-                        entry_point: "fs_main_blue",
-                        targets: &[RENDER_TARGET_FORMAT.into()],
-                    }),
-                    primitive: wgpu::PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                },
-            ));
-        }
-
-        if self.pipeline_lines.is_none()
-            && device
-                .features()
-                .contains(wgpu::Features::POLYGON_MODE_LINE)
-        {
-            self.pipeline_lines = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("Lines"),
-                    layout: Some(&self.pipeline_layout_empty),
-                    vertex: wgpu::VertexState {
-                        module: &self.shader_triangle_and_lines,
-                        entry_point: "vs_main",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.shader_triangle_and_lines,
-                        entry_point: "fs_main_white",
-                        targets: &[format.clone().into()],
-                    }),
-                    primitive: wgpu::PrimitiveState {
-                        polygon_mode: wgpu::PolygonMode::Line,
-                        topology: wgpu::PrimitiveTopology::LineStrip,
-                        ..Default::default()
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                },
-            ))
-        }
-
-        if self.pipeline_upscale.is_none() {
-            self.pipeline_upscale = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("Upscale"),
-                    layout: Some(&self.pipeline_layout_upscale),
-                    vertex: wgpu::VertexState {
-                        module: &self.shader_upscale,
-                        entry_point: "vs_main",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.shader_upscale,
-                        entry_point: "fs_main",
-                        targets: &[format.into()],
-                    }),
-                    primitive: wgpu::PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                },
-            ));
-        }
 
         if self.low_res_target.is_none()
             || self.bind_group_upscale.is_none()
@@ -276,7 +251,7 @@ impl RenderPass for ConservativeRasterRenderer {
             || config.height != self.prev_height
         {
             let (low_res_target, bind_group_upscale) =
-                Self::create_low_res_target(config, device, &self.bind_group_layout_upscale);
+                Self::create_low_res_target(config, &device, &self.bind_group_layout_upscale);
             self.low_res_target = Some(low_res_target);
             self.bind_group_upscale = Some(bind_group_upscale);
 
@@ -284,8 +259,9 @@ impl RenderPass for ConservativeRasterRenderer {
             self.prev_height = config.height;
         }
 
-        let pipeline_triangle_conservative = self.pipeline_triangle_conservative.as_ref().unwrap();
-        let pipeline_triangle_regular = self.pipeline_triangle_regular.as_ref().unwrap();
+        let (pipeline_triangle_conservative, pipeline_triangle_regular, pipeline_lines) =
+            self.pipelines_triangle.get((device.clone(), config.format));
+
         let low_res_target = self.low_res_target.as_ref().unwrap();
         let bind_group_upscale = self.bind_group_upscale.as_ref().unwrap();
 
@@ -309,7 +285,6 @@ impl RenderPass for ConservativeRasterRenderer {
             rpass.draw(0..3, 0..1);
         }
 
-        let pipeline_upscale = self.pipeline_upscale.as_ref().unwrap();
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("full resolution"),
@@ -324,11 +299,11 @@ impl RenderPass for ConservativeRasterRenderer {
                 depth_stencil_attachment: None,
             });
 
-            rpass.set_pipeline(pipeline_upscale);
+            rpass.set_pipeline(self.pipeline_upscale.get((device, config.format)));
             rpass.set_bind_group(0, bind_group_upscale, &[]);
             rpass.draw(0..3, 0..1);
 
-            if let Some(pipeline_lines) = self.pipeline_lines.as_ref() {
+            if let Some(pipeline_lines) = pipeline_lines {
                 rpass.set_pipeline(pipeline_lines);
                 rpass.draw(0..4, 0..1);
             }

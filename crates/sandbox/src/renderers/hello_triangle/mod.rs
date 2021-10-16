@@ -1,12 +1,12 @@
+use std::rc::Rc;
+
 use antigen_wgpu::{RenderPass, WgpuManager};
-use wgpu::{PipelineLayout, RenderPipeline, ShaderModule};
+use lazy::Lazy;
+use wgpu::RenderPipeline;
 
-#[derive(Debug)]
+type PipelineCtx = (Rc<wgpu::Device>, wgpu::TextureFormat);
 pub struct TriangleRenderer {
-    shader_module: ShaderModule,
-    pipeline_layout: PipelineLayout,
-
-    pipeline: Option<RenderPipeline>,
+    pipeline: Lazy<RenderPipeline, PipelineCtx>,
 }
 
 impl TriangleRenderer {
@@ -24,45 +24,41 @@ impl TriangleRenderer {
             push_constant_ranges: &[],
         });
 
-        TriangleRenderer {
-            shader_module,
-            pipeline_layout,
-            pipeline: None,
-        }
+        let pipeline = Lazy::new(Box::new(
+            move |(device, format): (Rc<wgpu::Device>, wgpu::TextureFormat)| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: None,
+                    layout: Some(&pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader_module,
+                        entry_point: "vs_main",
+                        buffers: &[],
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader_module,
+                        entry_point: "fs_main",
+                        targets: &[format.into()],
+                    }),
+                    primitive: wgpu::PrimitiveState::default(),
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                })
+            },
+        ));
+
+        TriangleRenderer { pipeline }
     }
 }
 
 impl RenderPass for TriangleRenderer {
     fn render(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        format: wgpu::ColorTargetState,
+        config: &wgpu::SurfaceConfiguration,
     ) {
-        if self.pipeline.is_none() {
-            self.pipeline = Some(wgpu_manager.device().create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: None,
-                    layout: Some(&self.pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &self.shader_module,
-                        entry_point: "vs_main",
-                        buffers: &[],
-                    },
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.shader_module,
-                        entry_point: "fs_main",
-                        targets: &[format],
-                    }),
-                    primitive: wgpu::PrimitiveState::default(),
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                },
-            ));
-        }
-
-        let pipeline = self.pipeline.as_ref().unwrap();
+        let pipeline = self.pipeline.get((wgpu_manager.device(), config.format));
 
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -81,4 +77,3 @@ impl RenderPass for TriangleRenderer {
         rpass.draw(0..3, 0..1);
     }
 }
-

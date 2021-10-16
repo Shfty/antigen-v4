@@ -1,8 +1,10 @@
 use std::borrow::Cow;
 
 use antigen_wgpu::{RenderPass, WgpuManager};
-use legion::Entity;
-use wgpu::{Buffer, ColorTargetState, PipelineLayout, RenderBundle, RenderPipeline, ShaderModule, ShaderModuleDescriptor, ShaderSource, SurfaceConfiguration, TextureView};
+use wgpu::{
+    Buffer, PipelineLayout, RenderBundle, ShaderModule, ShaderModuleDescriptor,
+    ShaderSource, SurfaceConfiguration, TextureFormat, TextureView,
+};
 
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
@@ -16,7 +18,6 @@ struct Vertex {
 
 #[derive(Debug)]
 pub struct MsaaLinesRenderer {
-    surface_entity: Entity,
     bundle: Option<RenderBundle>,
     shader: ShaderModule,
     pipeline_layout: PipelineLayout,
@@ -35,7 +36,7 @@ impl MsaaLinesRenderer {
         source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
     };
 
-    pub fn new(wgpu_manager: &WgpuManager, surface_entity: Entity) -> Self {
+    pub fn new(wgpu_manager: &WgpuManager) -> Self {
         let device = wgpu_manager.device();
 
         let sample_count = 4;
@@ -72,7 +73,6 @@ impl MsaaLinesRenderer {
         let vertex_count = vertex_data.len() as u32;
 
         MsaaLinesRenderer {
-            surface_entity,
             bundle: None,
             shader,
             pipeline_layout,
@@ -87,13 +87,12 @@ impl MsaaLinesRenderer {
 
     fn create_bundle(
         device: &wgpu::Device,
-        config: &wgpu::SurfaceConfiguration,
         shader: &wgpu::ShaderModule,
         pipeline_layout: &wgpu::PipelineLayout,
         sample_count: u32,
         vertex_buffer: &wgpu::Buffer,
         vertex_count: u32,
-        format: ColorTargetState,
+        format: TextureFormat,
     ) -> wgpu::RenderBundle {
         log::info!("sample_count: {}", sample_count);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -111,7 +110,7 @@ impl MsaaLinesRenderer {
             fragment: Some(wgpu::FragmentState {
                 module: shader,
                 entry_point: "fs_main",
-                targets: &[format.clone().into()],
+                targets: &[format.into()],
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::LineList,
@@ -127,7 +126,7 @@ impl MsaaLinesRenderer {
         let mut encoder =
             device.create_render_bundle_encoder(&wgpu::RenderBundleEncoderDescriptor {
                 label: None,
-                color_formats: &[format.format],
+                color_formats: &[format],
                 depth_stencil: None,
                 sample_count,
             });
@@ -142,7 +141,7 @@ impl MsaaLinesRenderer {
     fn create_multisampled_framebuffer(
         device: &wgpu::Device,
         config: &wgpu::SurfaceConfiguration,
-        format: ColorTargetState,
+        format: TextureFormat,
         sample_count: u32,
     ) -> wgpu::TextureView {
         let multisampled_texture_extent = wgpu::Extent3d {
@@ -155,7 +154,7 @@ impl MsaaLinesRenderer {
             mip_level_count: 1,
             sample_count,
             dimension: wgpu::TextureDimension::D2,
-            format: format.format,
+            format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             label: None,
         };
@@ -169,33 +168,28 @@ impl MsaaLinesRenderer {
 impl RenderPass for MsaaLinesRenderer {
     fn render(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
         view: &TextureView,
-        format: ColorTargetState,
+        config: &SurfaceConfiguration,
     ) {
         let device = wgpu_manager.device();
 
-        let config = wgpu_manager
-            .surface_configuration(&self.surface_entity)
-            .unwrap();
-
         if self.prev_width != config.width || self.prev_height != config.height {
             self.bundle = Some(Self::create_bundle(
-                device,
-                config,
+                &device,
                 &self.shader,
                 &self.pipeline_layout,
                 self.sample_count,
                 &self.vertex_buffer,
                 self.vertex_count,
-                format.clone(),
+                config.format,
             ));
 
             self.multisampled_framebuffer = Some(Self::create_multisampled_framebuffer(
-                device,
+                &device,
                 config,
-                format,
+                config.format,
                 self.sample_count,
             ));
 

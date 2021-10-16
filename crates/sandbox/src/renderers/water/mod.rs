@@ -4,9 +4,10 @@ use antigen_wgpu::{RenderPass, WgpuManager};
 
 use bytemuck::{Pod, Zeroable};
 use cgmath::Point3;
+use lazy::Lazy;
 use rand::SeedableRng;
-use std::{borrow::Cow, iter, mem};
-use wgpu::util::DeviceExt;
+use std::{borrow::Cow, mem, rc::Rc};
+use wgpu::{util::DeviceExt, TextureFormat, Device};
 
 #[rustfmt::skip]
 #[allow(unused)]
@@ -65,24 +66,17 @@ struct Uniforms {
     water: WaterUniforms,
 }
 
-#[derive(Debug)]
 pub struct WaterRenderer {
-    surface_entity: legion::Entity,
-
     water_vertex_buf: wgpu::Buffer,
     water_vertex_count: usize,
     water_bind_group_layout: wgpu::BindGroupLayout,
     water_bind_group: Option<wgpu::BindGroup>,
     water_uniform_buf: wgpu::Buffer,
-    water_pipeline_layout: wgpu::PipelineLayout,
-    water_pipeline: Option<wgpu::RenderPipeline>,
-    water_module: wgpu::ShaderModule,
+    water_pipeline: Lazy<wgpu::RenderPipeline, (Rc<Device>, TextureFormat)>,
 
     terrain_vertex_buf: wgpu::Buffer,
     terrain_vertex_count: usize,
     terrain_normal_bind_group: wgpu::BindGroup,
-    terrain_pipeline_layout: wgpu::PipelineLayout,
-    terrain_module: wgpu::ShaderModule,
     ///
     /// Binds to the uniform buffer where the
     /// camera has been placed underwater.
@@ -94,7 +88,7 @@ pub struct WaterRenderer {
     /// has been placed underwater.
     ///
     terrain_flipped_uniform_buf: wgpu::Buffer,
-    terrain_pipeline: Option<wgpu::RenderPipeline>,
+    terrain_pipeline: Lazy<wgpu::RenderPipeline, (Rc<Device>, TextureFormat)>,
 
     reflect_view: Option<wgpu::TextureView>,
 
@@ -113,9 +107,8 @@ pub struct WaterRenderer {
 }
 
 impl WaterRenderer {
-    pub fn new(wgpu_manager: &WgpuManager, surface_entity: legion::Entity) -> Self {
+    pub fn new(wgpu_manager: &WgpuManager) -> Self {
         let device = wgpu_manager.device();
-        let queue = wgpu_manager.queue();
 
         // Size of one water vertex
         let water_vertices = point_gen::HexWaterMesh::generate(SIZE).generate_points();
@@ -330,18 +323,127 @@ impl WaterRenderer {
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("water.wgsl"))),
         });
 
+        let water_pipeline = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                // Create the render pipelines. These describe how the data will flow through the GPU, and what
+                // constraints and modifiers it will have.
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("water"),
+                    // The "layout" is what uniforms will be needed.
+                    layout: Some(&water_pipeline_layout),
+                    // Vertex shader and input buffers
+                    vertex: wgpu::VertexState {
+                        module: &water_module,
+                        entry_point: "vs_main",
+                        // Layout of our vertices. This should match the structs
+                        // which are uploaded to the GPU. This should also be
+                        // ensured by tagging on either a `#[repr(C)]` onto a
+                        // struct, or a `#[repr(transparent)]` if it only contains
+                        // one item, which is itself `repr(C)`.
+                        buffers: &[wgpu::VertexBufferLayout {
+                            array_stride: mem::size_of::<point_gen::WaterVertexAttributes>()
+                                as wgpu::BufferAddress,
+                            step_mode: wgpu::VertexStepMode::Vertex,
+                            attributes: &wgpu::vertex_attr_array![0 => Sint16x2, 1 => Sint8x4],
+                        }],
+                    },
+                    // Fragment shader and output targets
+                    fragment: Some(wgpu::FragmentState {
+                        module: &water_module,
+                        entry_point: "fs_main",
+                        // Describes how the colour will be interpolated
+                        // and assigned to the output attachment.
+                        targets: &[wgpu::ColorTargetState {
+                            format,
+                            blend: Some(wgpu::BlendState {
+                                color: wgpu::BlendComponent {
+                                    src_factor: wgpu::BlendFactor::SrcAlpha,
+                                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                                    operation: wgpu::BlendOperation::Add,
+                                },
+                                alpha: wgpu::BlendComponent {
+                                    src_factor: wgpu::BlendFactor::One,
+                                    dst_factor: wgpu::BlendFactor::One,
+                                    operation: wgpu::BlendOperation::Max,
+                                },
+                            }),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }],
+                    }),
+                    // How the triangles will be rasterized. This is more important
+                    // for the terrain because of the beneath-the water shot.
+                    // This is also dependent on how the triangles are being generated.
+                    primitive: wgpu::PrimitiveState {
+                        // What kind of data are we passing in?
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        front_face: wgpu::FrontFace::Cw,
+                        ..Default::default()
+                    },
+                    // Describes how us writing to the depth/stencil buffer
+                    // will work. Since this is water, we need to read from the
+                    // depth buffer both as a texture in the shader, and as an
+                    // input attachment to do depth-testing. We don't write, so
+                    // depth_write_enabled is set to false. This is called
+                    // RODS or read-only depth stencil.
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        // We don't use stencil.
+                        format: wgpu::TextureFormat::Depth32Float,
+                        depth_write_enabled: false,
+                        depth_compare: wgpu::CompareFunction::Less,
+                        stencil: wgpu::StencilState::default(),
+                        bias: wgpu::DepthBiasState::default(),
+                    }),
+                    // No multisampling is used.
+                    multisample: wgpu::MultisampleState::default(),
+                })
+            },
+        ));
+
+        let terrain_pipeline = Lazy::new(Box::new(
+            move |(device, format): (Rc<Device>, TextureFormat)| {
+                // Same idea as the water pipeline.
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("terrain"),
+            layout: Some(&terrain_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &terrain_module,
+                entry_point: "vs_main",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: mem::size_of::<point_gen::TerrainVertexAttributes>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &terrain_module,
+                entry_point: "fs_main",
+                targets: &[format.into()],
+            }),
+            primitive: wgpu::PrimitiveState {
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Front),
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+        })
+            },
+        ));
+
         // Done
         WaterRenderer {
-            surface_entity,
-
             water_vertex_buf,
             water_vertex_count: water_vertices.len(),
             water_bind_group_layout,
             water_bind_group: None,
             water_uniform_buf,
-            water_pipeline_layout,
-            water_pipeline: None,
-            water_module,
+            water_pipeline,
 
             terrain_vertex_buf,
             terrain_vertex_count: terrain_vertices.len(),
@@ -349,9 +451,7 @@ impl WaterRenderer {
             terrain_flipped_bind_group,
             terrain_normal_uniform_buf,
             terrain_flipped_uniform_buf,
-            terrain_pipeline_layout,
-            terrain_pipeline: None,
-            terrain_module,
+            terrain_pipeline,
 
             reflect_view: None,
 
@@ -535,16 +635,13 @@ impl WaterRenderer {
 impl RenderPass for WaterRenderer {
     fn render(
         &mut self,
-        encoder: &mut wgpu::CommandEncoder,
         wgpu_manager: &WgpuManager,
+        encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
-        format: wgpu::ColorTargetState,
+        config: &wgpu::SurfaceConfiguration,
     ) {
         let device = wgpu_manager.device();
         let queue = wgpu_manager.queue();
-        let config = wgpu_manager
-            .surface_configuration(&self.surface_entity)
-            .unwrap();
 
         if self.reflect_view.is_none()
             || self.depth_buffer.is_none()
@@ -552,8 +649,8 @@ impl RenderPass for WaterRenderer {
         {
             let (reflect_view, depth_buffer, water_bind_group) = Self::initialize_resources(
                 config,
-                device,
-                queue,
+                &device,
+                &queue,
                 &self.water_uniform_buf,
                 &self.terrain_normal_uniform_buf,
                 &self.terrain_flipped_uniform_buf,
@@ -565,124 +662,13 @@ impl RenderPass for WaterRenderer {
             self.water_bind_group = Some(water_bind_group);
         }
 
-        if self.water_pipeline.is_none() {
-            // Create the render pipelines. These describe how the data will flow through the GPU, and what
-            // constraints and modifiers it will have.
-            self.water_pipeline = Some(device.create_render_pipeline(
-                &wgpu::RenderPipelineDescriptor {
-                    label: Some("water"),
-                    // The "layout" is what uniforms will be needed.
-                    layout: Some(&self.water_pipeline_layout),
-                    // Vertex shader and input buffers
-                    vertex: wgpu::VertexState {
-                        module: &self.water_module,
-                        entry_point: "vs_main",
-                        // Layout of our vertices. This should match the structs
-                        // which are uploaded to the GPU. This should also be
-                        // ensured by tagging on either a `#[repr(C)]` onto a
-                        // struct, or a `#[repr(transparent)]` if it only contains
-                        // one item, which is itself `repr(C)`.
-                        buffers: &[wgpu::VertexBufferLayout {
-                            array_stride: mem::size_of::<point_gen::WaterVertexAttributes>()
-                                as wgpu::BufferAddress,
-                            step_mode: wgpu::VertexStepMode::Vertex,
-                            attributes: &wgpu::vertex_attr_array![0 => Sint16x2, 1 => Sint8x4],
-                        }],
-                    },
-                    // Fragment shader and output targets
-                    fragment: Some(wgpu::FragmentState {
-                        module: &self.water_module,
-                        entry_point: "fs_main",
-                        // Describes how the colour will be interpolated
-                        // and assigned to the output attachment.
-                        targets: &[wgpu::ColorTargetState {
-                            format: config.format,
-                            blend: Some(wgpu::BlendState {
-                                color: wgpu::BlendComponent {
-                                    src_factor: wgpu::BlendFactor::SrcAlpha,
-                                    dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
-                                    operation: wgpu::BlendOperation::Add,
-                                },
-                                alpha: wgpu::BlendComponent {
-                                    src_factor: wgpu::BlendFactor::One,
-                                    dst_factor: wgpu::BlendFactor::One,
-                                    operation: wgpu::BlendOperation::Max,
-                                },
-                            }),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        }],
-                    }),
-                    // How the triangles will be rasterized. This is more important
-                    // for the terrain because of the beneath-the water shot.
-                    // This is also dependent on how the triangles are being generated.
-                    primitive: wgpu::PrimitiveState {
-                        // What kind of data are we passing in?
-                        topology: wgpu::PrimitiveTopology::TriangleList,
-                        front_face: wgpu::FrontFace::Cw,
-                        ..Default::default()
-                    },
-                    // Describes how us writing to the depth/stencil buffer
-                    // will work. Since this is water, we need to read from the
-                    // depth buffer both as a texture in the shader, and as an
-                    // input attachment to do depth-testing. We don't write, so
-                    // depth_write_enabled is set to false. This is called
-                    // RODS or read-only depth stencil.
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        // We don't use stencil.
-                        format: wgpu::TextureFormat::Depth32Float,
-                        depth_write_enabled: false,
-                        depth_compare: wgpu::CompareFunction::Less,
-                        stencil: wgpu::StencilState::default(),
-                        bias: wgpu::DepthBiasState::default(),
-                    }),
-                    // No multisampling is used.
-                    multisample: wgpu::MultisampleState::default(),
-                },
-            ));
-        }
-
-        if self.terrain_pipeline.is_none() {
-            // Same idea as the water pipeline.
-            self.terrain_pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("terrain"),
-            layout: Some(&self.terrain_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &self.terrain_module,
-                entry_point: "vs_main",
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: mem::size_of::<point_gen::TerrainVertexAttributes>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Unorm8x4],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &self.terrain_module,
-                entry_point: "fs_main",
-                targets: &[config.format.into()],
-            }),
-            primitive: wgpu::PrimitiveState {
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Front),
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-        }));
-        }
-
         if config.width != self.prev_width || config.height != self.prev_height {
             // Regenerate all of the buffers and textures.
 
             let (reflect_view, depth_buffer, water_bind_group) = Self::initialize_resources(
                 config,
-                device,
-                queue,
+                &device,
+                &queue,
                 &self.water_uniform_buf,
                 &self.terrain_normal_uniform_buf,
                 &self.terrain_flipped_uniform_buf,
@@ -723,8 +709,6 @@ impl RenderPass for WaterRenderer {
         let reflect_view = self.reflect_view.as_ref().unwrap();
         let depth_buffer = self.depth_buffer.as_ref().unwrap();
         let water_bind_group = self.water_bind_group.as_ref().unwrap();
-        let water_pipeline = self.water_pipeline.as_ref().unwrap();
-        let terrain_pipeline = self.terrain_pipeline.as_ref().unwrap();
 
         // First pass: render the reflection.
         {
@@ -749,7 +733,7 @@ impl RenderPass for WaterRenderer {
                     stencil_ops: None,
                 }),
             });
-            rpass.set_pipeline(terrain_pipeline);
+            rpass.set_pipeline(self.terrain_pipeline.get((device.clone(), config.format)));
             rpass.set_bind_group(0, &self.terrain_flipped_bind_group, &[]);
             rpass.set_vertex_buffer(0, self.terrain_vertex_buf.slice(..));
             rpass.draw(0..self.terrain_vertex_count as u32, 0..1);
@@ -776,7 +760,7 @@ impl RenderPass for WaterRenderer {
                     stencil_ops: None,
                 }),
             });
-            rpass.set_pipeline(terrain_pipeline);
+            rpass.set_pipeline(self.terrain_pipeline.get((device.clone(), config.format)));
             rpass.set_bind_group(0, &self.terrain_normal_bind_group, &[]);
             rpass.set_vertex_buffer(0, self.terrain_vertex_buf.slice(..));
             rpass.draw(0..self.terrain_vertex_count as u32, 0..1);
@@ -801,7 +785,7 @@ impl RenderPass for WaterRenderer {
                 }),
             });
 
-            rpass.set_pipeline(water_pipeline);
+            rpass.set_pipeline(self.water_pipeline.get((device, config.format)));
             rpass.set_bind_group(0, water_bind_group, &[]);
             rpass.set_vertex_buffer(0, self.water_vertex_buf.slice(..));
             rpass.draw(0..self.water_vertex_count as u32, 0..1);
