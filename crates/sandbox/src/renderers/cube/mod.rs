@@ -1,17 +1,24 @@
-use antigen_wgpu::{BufferId, RenderPass, WgpuManager};
-use antigen_winit::WindowComponent;
+use antigen_wgpu::{RenderPass, SurfaceComponent, WgpuManager};
 use bytemuck::{Pod, Zeroable};
-use cgmath::Zero;
+use cgmath::{SquareMatrix, Zero};
 use lazy::Lazy;
-use parking_lot::RwLock;
+use legion::{storage::Component, world::SubWorld, Entity, IntoQuery};
 use serde::ser::SerializeStruct;
-use std::{borrow::Cow, ops::Deref, rc::Rc, sync::Arc};
+use std::{borrow::Cow, ops::Deref, sync::Arc};
 use wgpu::{
-    util::DeviceExt, BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Device,
-    RenderPipeline, ShaderModuleDescriptor, ShaderSource, TextureFormat, VertexBufferLayout,
+    util::DeviceExt, BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, Device,
+    Queue, RenderPipeline, ShaderModuleDescriptor, ShaderSource, SurfaceConfiguration,
+    TextureFormat, VertexBufferLayout,
 };
 
-use crate::resources::Timing;
+use crate::{
+    components::{
+        AspectRatio, EyePosition, FarPlane, FieldOfView, LookAt, LookTo, NearPlane,
+        OrthographicProjection, PerspectiveProjection, ProjectionMatrix, UniformWrite, UpVector,
+        ViewMatrix, ViewProjectionMatrix,
+    },
+    resources::Timing,
+};
 
 #[rustfmt::skip]
 #[allow(unused)]
@@ -36,67 +43,29 @@ fn vertex(pos: [i8; 3], tc: [i8; 2]) -> Vertex {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct CubeRenderState {
-    pub fov: f32,
-    pub eye: cgmath::Point3<f32>,
-    pub z_near: f32,
-    pub z_far: f32,
-}
-
-impl Default for CubeRenderState {
-    fn default() -> Self {
-        CubeRenderState {
-            fov: 45.0,
-            eye: cgmath::Point3::new(1.5, -5.0, 3.0),
-            z_near: 1.0,
-            z_far: 10.0,
-        }
-    }
-}
-
-impl serde::Serialize for CubeRenderState {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut s = serializer.serialize_struct("CubeRenderState", 2)?;
-        s.serialize_field("fov", &self.fov)?;
-        s.serialize_field("eye", &format!("{:?}", self.eye))?;
-        s.end()
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for CubeRenderState {
-    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        unimplemented!()
-    }
-}
-
 #[derive(Debug, Clone)]
-pub struct CubeRenderStateComponent(Arc<RwLock<CubeRenderState>>);
+pub struct UniformBufferComponent(Arc<Buffer>);
 
-impl Deref for CubeRenderStateComponent {
-    type Target = Arc<RwLock<CubeRenderState>>;
+impl Deref for UniformBufferComponent {
+    type Target = Arc<Buffer>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl serde::Serialize for CubeRenderStateComponent {
+impl serde::Serialize for UniformBufferComponent {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        self.0.read().serialize(serializer)
+        serializer
+            .serialize_struct("UniformBufferComponent", 0)?
+            .end()
     }
 }
 
-impl<'de> serde::Deserialize<'de> for CubeRenderStateComponent {
+impl<'de> serde::Deserialize<'de> for UniformBufferComponent {
     fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -105,25 +74,20 @@ impl<'de> serde::Deserialize<'de> for CubeRenderStateComponent {
     }
 }
 
-impl From<Arc<RwLock<CubeRenderState>>> for CubeRenderStateComponent {
-    fn from(v: Arc<RwLock<CubeRenderState>>) -> Self {
-        CubeRenderStateComponent(v)
+impl From<Arc<Buffer>> for UniformBufferComponent {
+    fn from(v: Arc<Buffer>) -> Self {
+        UniformBufferComponent(v)
     }
 }
 
 pub struct CubeRenderer {
     bind_group: BindGroup,
 
-    vertex_buffer_id: BufferId,
-    index_buffer_id: BufferId,
-    uniform_buffer_id: BufferId,
+    vertex_buffer: Buffer,
+    index_buffer: Buffer,
+    uniform_buffer: Arc<Buffer>,
 
-    pipelines: Lazy<(RenderPipeline, Option<RenderPipeline>), (Rc<Device>, TextureFormat)>,
-
-    state: Arc<RwLock<CubeRenderState>>,
-    prev_state: CubeRenderState,
-    prev_width: u32,
-    prev_height: u32,
+    pipelines: Lazy<(RenderPipeline, Option<RenderPipeline>), (Arc<Device>, TextureFormat)>,
 }
 
 impl CubeRenderer {
@@ -184,21 +148,17 @@ impl CubeRenderer {
         // Create vertex and index buffers
         let (vertex_data, index_data) = Self::create_vertices();
 
-        let vertex_buffer_id = wgpu_manager.add_buffer(device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Vertex Buffer"),
-                contents: bytemuck::cast_slice(&vertex_data),
-                usage: wgpu::BufferUsages::VERTEX,
-            },
-        ));
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&vertex_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
 
-        let index_buffer_id = wgpu_manager.add_buffer(device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(&index_data),
-                usage: wgpu::BufferUsages::INDEX,
-            },
-        ));
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(&index_data),
+            usage: wgpu::BufferUsages::INDEX,
+        });
 
         // Create pipeline layout
         let bind_group_layout =
@@ -243,14 +203,13 @@ impl CubeRenderer {
         // Create uniform buffer
         let mx_total = cgmath::Matrix4::zero();
         let mx_ref: &[f32; 16] = mx_total.as_ref();
-        let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Uniform Buffer"),
-            contents: bytemuck::cast_slice(mx_ref),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let uniform_buffer_id = wgpu_manager.add_buffer(uniform_buf);
-        let uniform_buf = wgpu_manager.buffer(&uniform_buffer_id).unwrap();
+        let uniform_buffer = Arc::new(device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Uniform Buffer"),
+                contents: bytemuck::cast_slice(mx_ref),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            },
+        ));
 
         // Create texture view
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -261,7 +220,7 @@ impl CubeRenderer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform_buf.as_entire_binding(),
+                    resource: uniform_buffer.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -272,10 +231,9 @@ impl CubeRenderer {
         });
 
         let shader_module = device.create_shader_module(&Self::SHADER_MODULE_DESCRIPTOR);
-        let state = Arc::new(RwLock::new(CubeRenderState::default()));
 
         let pipelines = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 let cube_pipeline =
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: None,
@@ -347,19 +305,15 @@ impl CubeRenderer {
 
         CubeRenderer {
             bind_group,
-            vertex_buffer_id,
-            index_buffer_id,
-            uniform_buffer_id,
-            state,
+            vertex_buffer,
+            index_buffer,
+            uniform_buffer,
             pipelines,
-            prev_state: Default::default(),
-            prev_width: Default::default(),
-            prev_height: Default::default(),
         }
     }
 
-    pub fn take_state_handle(&self) -> Arc<RwLock<CubeRenderState>> {
-        self.state.clone()
+    pub fn take_uniform_buffer_handle(&self) -> Arc<Buffer> {
+        self.uniform_buffer.clone()
     }
 
     fn create_vertices() -> (Vec<Vertex>, Vec<u16>) {
@@ -436,43 +390,6 @@ impl RenderPass for CubeRenderer {
         config: &wgpu::SurfaceConfiguration,
     ) {
         let device = wgpu_manager.device();
-        let queue = wgpu_manager.queue();
-
-        // Fetch resources
-        let index_buf = wgpu_manager.buffer(&self.index_buffer_id).unwrap();
-        let vertex_buf = wgpu_manager.buffer(&self.vertex_buffer_id).unwrap();
-
-        let state = *self.state.read();
-
-        // Update matrix on surface size or state change
-        let width = config.width;
-        let height = config.height;
-        if width != self.prev_width || height != self.prev_height || state != self.prev_state {
-            let aspect_ratio = width as f32 / height as f32;
-            let mx_projection = cgmath::perspective(
-                cgmath::Deg(state.fov.max(1.0).min(179.0)),
-                aspect_ratio,
-                1.0,
-                10.0,
-            );
-            let mx_view = cgmath::Matrix4::look_at_rh(
-                state.eye,
-                cgmath::Point3::new(0f32, 0.0, 0.0),
-                cgmath::Vector3::unit_z(),
-            );
-            let mx_correction = OPENGL_TO_WGPU_MATRIX;
-            let mx_total = mx_correction * mx_projection * mx_view;
-
-            let uniform_buf = wgpu_manager.buffer(&self.uniform_buffer_id).unwrap();
-
-            let mx_ref: &[f32; 16] = mx_total.as_ref();
-
-            queue.write_buffer(&uniform_buf, 0, bytemuck::cast_slice(mx_ref));
-
-            self.prev_width = width;
-            self.prev_height = height;
-            self.prev_state = state;
-        }
 
         // Render
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -498,8 +415,8 @@ impl RenderPass for CubeRenderer {
         rpass.push_debug_group("Prepare data for draw.");
         rpass.set_pipeline(cube_pipeline);
         rpass.set_bind_group(0, &self.bind_group, &[]);
-        rpass.set_index_buffer(index_buf.slice(..), wgpu::IndexFormat::Uint16);
-        rpass.set_vertex_buffer(0, vertex_buf.slice(..));
+        rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rpass.pop_debug_group();
         rpass.insert_debug_marker("Draw!");
         rpass.draw_indexed(0..36, 0, 0..1);
@@ -512,18 +429,121 @@ impl RenderPass for CubeRenderer {
 }
 
 #[legion::system(par_for_each)]
-pub fn integrate_cube_renderer(
-    _: &mut WindowComponent,
-    cube_render_state: &mut CubeRenderStateComponent,
-    #[resource] timing: &Timing,
-) {
-    let mut guard = cube_render_state.write();
-
-    let total = timing.total_time().as_secs_f32();
-    guard.eye.x = total.sin() * 1.5;
-    guard.eye.y = total.cos() * -5.0;
-    guard.fov = ((total * 0.2).sin() * 90.0) + 90.0;
+pub fn aspect_ratio(surface: &SurfaceComponent, AspectRatio(aspect_ratio): &mut AspectRatio) {
+    match surface.state() {
+        antigen_wgpu::SurfaceState::Valid(config) => {
+            let SurfaceConfiguration { width, height, .. } = *config.read();
+            *aspect_ratio = width as f32 / height as f32
+        }
+        _ => (),
+    }
 }
 
 #[legion::system(par_for_each)]
-pub fn build_camera_matrix(cube_render_state: &mut CubeRenderStateComponent) {}
+pub fn look_at(
+    EyePosition(eye_position): &EyePosition,
+    LookAt(look_at): &LookAt,
+    UpVector(up_vector): &UpVector,
+    view_matrix: &mut ViewMatrix,
+) {
+    **view_matrix = cgmath::Matrix4::look_at_rh(*eye_position, *look_at, *up_vector);
+}
+
+#[legion::system(par_for_each)]
+pub fn look_to(
+    EyePosition(eye_position): &EyePosition,
+    LookTo(look_to): &LookTo,
+    UpVector(up_vector): &UpVector,
+    view_matrix: &mut ViewMatrix,
+) {
+    **view_matrix = cgmath::Matrix4::look_to_rh(*eye_position, *look_to, *up_vector);
+}
+
+#[legion::system(par_for_each)]
+pub fn perspective_projection(
+    _: &PerspectiveProjection,
+    field_of_view: &FieldOfView,
+    NearPlane(near_plane): &NearPlane,
+    FarPlane(far_plane): &FarPlane,
+    AspectRatio(aspect_ratio): &AspectRatio,
+    projection_matrix: &mut ProjectionMatrix,
+) {
+    **projection_matrix = field_of_view.to_matrix(*aspect_ratio, *near_plane, *far_plane);
+}
+
+#[legion::system(par_for_each)]
+pub fn orthographic_projection(
+    orthographic_projection: &OrthographicProjection,
+    NearPlane(near_plane): &NearPlane,
+    FarPlane(far_plane): &FarPlane,
+    projection_matrix: &mut ProjectionMatrix,
+) {
+    **projection_matrix = orthographic_projection.to_matrix(*near_plane, *far_plane);
+}
+
+#[legion::system(for_each)]
+pub fn view_projection_matrix(
+    projection_matrix: Option<&ProjectionMatrix>,
+    view_matrix: Option<&ViewMatrix>,
+    view_projection_matrix: &mut ViewProjectionMatrix,
+) {
+    let mx_total = cgmath::Matrix4::<f32>::identity();
+
+    let mx_total = if let Some(view_matrix) = view_matrix {
+        (**view_matrix) * mx_total
+    } else {
+        mx_total
+    };
+
+    let mx_total = if let Some(projection_matrix) = projection_matrix {
+        (**projection_matrix) * mx_total
+    } else {
+        mx_total
+    };
+
+    let mx_total = OPENGL_TO_WGPU_MATRIX * mx_total;
+    **view_projection_matrix = mx_total;
+}
+
+#[legion::system(par_for_each)]
+#[read_component(T)]
+#[write_component(UniformBufferComponent)]
+pub fn uniform_write<T: Component + AsRef<[u8]> + Send + Sync + 'static>(
+    world: &SubWorld,
+    entity: &Entity,
+    uniform_write: &UniformWrite<T>,
+    #[resource] queue: &Arc<Queue>,
+) {
+    let from = uniform_write.from_entity().unwrap_or(entity);
+    let to = uniform_write.to_entity().unwrap_or(entity);
+
+    let value = <&T>::query().get(world, *from).unwrap().as_ref();
+    let uniform_buffer = <&UniformBufferComponent>::query()
+        .get(world, *to)
+        .unwrap()
+        .as_ref();
+
+    queue.write_buffer(
+        uniform_buffer,
+        uniform_write.offset(),
+        bytemuck::cast_slice(value),
+    );
+}
+
+// Sandbox specific code
+#[legion::system(par_for_each)]
+pub fn update_look(
+    EyePosition(eye_position): &mut EyePosition,
+    _: &LookAt,
+    #[resource] timing: &Timing,
+) {
+    let total = timing.total_time().as_secs_f32();
+    *eye_position = cgmath::Point3::new(total.sin() * 1.5, total.cos() * -5.0, 5.0);
+}
+
+#[legion::system(par_for_each)]
+pub fn update_projection(perspective_projection: &mut FieldOfView, #[resource] timing: &Timing) {
+    let total = timing.total_time().as_secs_f32();
+    let fov = ((total * 0.2).sin() * 90.0) + 90.0;
+    perspective_projection.set_fov(cgmath::Deg(fov));
+}

@@ -1,12 +1,12 @@
-use antigen_winit::{WindowComponent, WindowState, WinitResponder};
+use antigen_winit::{WindowComponent, WindowState};
 use atomic_id::*;
 use legion::{Entity, World};
+use parking_lot::RwLock;
 use remote_channel::*;
 use serde::ser::SerializeStruct;
 use std::{
     cell::{Ref, RefCell, RefMut},
     collections::{BTreeMap, HashMap},
-    rc::Rc,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
@@ -18,23 +18,46 @@ use wgpu::{
 };
 use winit::{dpi::PhysicalSize, window::Window};
 
-pub type WgpuRequester = RemoteRequester<WgpuManager, WinitResponder, World>;
-pub type WgpuResponder = RemoteResponder<WgpuManager, WinitResponder, World>;
+pub type WgpuRequester = RemoteRequester<WgpuManager, (), World>;
+pub type WgpuResponder = RemoteResponder<WgpuManager, (), World>;
 
 atomic_id!(NEXT_RENDER_PASS_ID, RenderPassId);
 atomic_id!(NEXT_BUFFER_ID, BufferId);
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug)]
 pub enum SurfaceState {
     Invalid,
     Pending,
-    Valid,
+    Valid(Arc<RwLock<SurfaceConfiguration>>),
     Destroyed,
 }
 
 impl Default for SurfaceState {
     fn default() -> Self {
         SurfaceState::Invalid
+    }
+}
+
+impl serde::Serialize for SurfaceState {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            SurfaceState::Invalid => serializer.serialize_str("Invalid"),
+            SurfaceState::Pending => serializer.serialize_str("Pending"),
+            SurfaceState::Valid(_) => serializer.serialize_str("Valid"),
+            SurfaceState::Destroyed => serializer.serialize_str("Destroyed"),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SurfaceState {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        unimplemented!()
     }
 }
 
@@ -65,6 +88,10 @@ impl SurfaceComponent {
         &self.state
     }
 
+    pub fn state_mut(&mut self) -> &mut SurfaceState {
+        &mut self.state
+    }
+
     pub fn set_invalid(&mut self) {
         self.state = SurfaceState::Invalid;
     }
@@ -73,8 +100,8 @@ impl SurfaceComponent {
         self.state = SurfaceState::Pending;
     }
 
-    pub fn set_valid(&mut self) {
-        self.state = SurfaceState::Valid;
+    pub fn set_valid(&mut self, config: Arc<RwLock<SurfaceConfiguration>>) {
+        self.state = SurfaceState::Valid(config);
     }
 
     pub fn set_destroyed(&mut self) {
@@ -111,12 +138,12 @@ impl<'de> serde::Deserialize<'de> for SurfaceComponent {
 }
 
 pub struct WgpuManager {
-    instance: Rc<Instance>,
-    adapter: Rc<Adapter>,
-    device: Rc<Device>,
-    queue: Rc<Queue>,
+    instance: Arc<Instance>,
+    adapter: Arc<Adapter>,
+    device: Arc<Device>,
+    queue: Arc<Queue>,
 
-    surface_configurations: HashMap<Entity, SurfaceConfiguration>,
+    surface_configurations: HashMap<Entity, Arc<RwLock<SurfaceConfiguration>>>,
     surfaces: HashMap<Entity, Surface>,
 
     render_passes: RefCell<BTreeMap<RenderPassId, Box<dyn RenderPass>>>,
@@ -140,23 +167,23 @@ impl WgpuManager {
         }
     }
 
-    pub fn instance(&self) -> Rc<Instance> {
+    pub fn instance(&self) -> Arc<Instance> {
         self.instance.clone()
     }
 
-    pub fn adapter(&self) -> Rc<Adapter> {
+    pub fn adapter(&self) -> Arc<Adapter> {
         self.adapter.clone()
     }
 
-    pub fn device(&self) -> Rc<Device> {
+    pub fn device(&self) -> Arc<Device> {
         self.device.clone()
     }
 
-    pub fn queue(&self) -> Rc<Queue> {
+    pub fn queue(&self) -> Arc<Queue> {
         self.queue.clone()
     }
 
-    pub fn surface_configuration(&self, entity: &Entity) -> Option<&SurfaceConfiguration> {
+    pub fn surface_configuration(&self, entity: &Entity) -> Option<&Arc<RwLock<SurfaceConfiguration>>> {
         self.surface_configurations.get(entity)
     }
 
@@ -164,7 +191,11 @@ impl WgpuManager {
         self.surfaces.get(entity)
     }
 
-    pub fn create_surface_for(&mut self, entity: Entity, window: &Window) {
+    pub fn create_surface_for(
+        &mut self,
+        entity: Entity,
+        window: &Window,
+    ) -> Arc<RwLock<SurfaceConfiguration>> {
         let size = window.inner_size();
         let surface = unsafe { self.instance.create_surface(window) };
         let swapchain_format = surface.get_preferred_format(&self.adapter).unwrap();
@@ -180,23 +211,30 @@ impl WgpuManager {
         surface.configure(&self.device, &surface_config);
 
         self.surfaces.insert(entity, surface);
-        self.surface_configurations.insert(entity, surface_config);
+
+        let surface_config = Arc::new(RwLock::new(surface_config));
+        self.surface_configurations
+            .insert(entity, surface_config.clone());
+        surface_config
     }
 
-    pub fn try_resize_surface(&mut self, entity: &Entity, size: PhysicalSize<u32>) {
+    pub fn try_resize_surface(
+        &mut self,
+        entity: &Entity,
+        size: PhysicalSize<u32>,
+    ) {
         if size.width == 0 || size.height == 0 {
             return;
         }
 
-        let surface_config = self.surface_configurations.get_mut(entity).unwrap();
+        let surface = self.surfaces.get(entity).unwrap();
+        let mut surface_config = self.surface_configurations.get_mut(entity).unwrap().write();
         surface_config.width = size.width;
         surface_config.height = size.height;
-
-        let surface = self.surfaces.get(entity).unwrap();
-        surface.configure(&self.device, surface_config);
+        surface.configure(&self.device, &surface_config);
     }
 
-    pub fn destroy_surface(&mut self, entity: &Entity) {
+    pub fn destroy_surface(&mut self, world: &mut World, entity: &Entity) {
         self.surfaces
             .remove(entity)
             .unwrap_or_else(|| panic!("No surface with ID {:?}", entity));
@@ -204,6 +242,12 @@ impl WgpuManager {
         self.surface_configurations
             .remove(entity)
             .unwrap_or_else(|| panic!("No surface configuration with ID {:?}", entity));
+
+        if let Some(mut entry) = world.entry(*entity) {
+            if let Ok(surface) = entry.get_component_mut::<SurfaceComponent>() {
+                surface.set_destroyed()
+            }
+        }
     }
 
     pub fn add_render_pass(&self, constructor: Box<dyn RenderPass>) -> RenderPassId {
@@ -354,24 +398,24 @@ where
 #[legion::system(par_for_each)]
 pub fn create_surfaces(
     entity: &Entity,
-    window: &mut WindowComponent,
+    window: &WindowComponent,
     surface: &mut SurfaceComponent,
     #[resource] wgpu_requester: &WgpuRequester,
 ) {
     let entity = *entity;
-    if let WindowState::Valid(_) = window.state() {
+    if let WindowState::Valid(_, window) = window.state() {
         if let SurfaceState::Invalid = surface.state() {
             surface.set_pending();
 
-            wgpu_requester.send_request(Box::new(move |wgpu_manager, wm_responder| {
-                let window = wm_responder.window(&entity).unwrap();
-                wgpu_manager.create_surface_for(entity, window);
+            let window = window.clone();
+            wgpu_requester.send_request(Box::new(move |wgpu_manager, _| {
+                let config = wgpu_manager.create_surface_for(entity, &window);
                 window.request_redraw();
 
                 Box::new(move |world: &mut World| {
                     if let Some(mut entry) = world.entry(entity) {
                         if let Ok(surface) = entry.get_component_mut::<SurfaceComponent>() {
-                            surface.set_valid();
+                            surface.set_valid(config);
                         }
                     }
                 })

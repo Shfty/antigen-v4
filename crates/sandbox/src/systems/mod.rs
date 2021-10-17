@@ -1,9 +1,9 @@
-mod timing;
 mod crossterm;
-mod tui_debugger;
 mod game;
+mod timing;
+mod tui_debugger;
 
-pub use timing::*;
 pub use self::crossterm::*;
 pub use self::tui_debugger::*;
 pub use game::*;
+pub use timing::*;

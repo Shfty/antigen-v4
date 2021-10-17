@@ -8,6 +8,7 @@ winit = "0.25.0"
 serde = "1.0.126"
 legion = "0.4.0"
 crossbeam-channel = "0.5.1"
+antigen-components = { path = "../antigen-components" }
 
 atomic-id = { path = "../atomic-id" }
 remote-channel = { path = "../remote-channel" }

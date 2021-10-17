@@ -1,10 +1,10 @@
 use crossbeam_channel::{Sender, Receiver};
 
 /// Function that receives the output of a [`RemoteRequest`]
-pub type RemoteResponse<R> = Box<dyn Fn(&mut R) + Send + Sync>;
+pub type RemoteResponse<R> = Box<dyn FnOnce(&mut R) + Send + Sync>;
 
 /// Function that remotely controls an instance of type T using some context C
-pub type RemoteRequest<T, C, R> = Box<dyn Fn(&mut T, &C) -> RemoteResponse<R> + Send + Sync>;
+pub type RemoteRequest<T, C, R> = Box<dyn FnOnce(&mut T, &C) -> RemoteResponse<R> + Send + Sync>;
 
 /// Wrapper type for cross-thread remote control over an instance of type T
 pub struct RemoteResponder<T, C, R> {

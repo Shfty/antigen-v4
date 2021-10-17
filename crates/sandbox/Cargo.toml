@@ -6,11 +6,10 @@ version = "0.1.0"
 
 [features]
 default = ["plugin-registry-inventory", "profiling/profile-with-tracing"]
-plugin-registry-linkme = ["linkme", "legion-debugger/registry-linkme"]
-plugin-registry-inventory = ["inventory", "legion-debugger/registry-inventory"]
+plugin-registry-linkme = ["linkme", "legion-debugger/registry-linkme", "antigen-components/registry-linkme"]
+plugin-registry-inventory = ["inventory", "legion-debugger/registry-inventory", "antigen-components/registry-inventory"]
 
 [dependencies]
-legion = "0.4.0"
 crossterm = "0.21.0"
 profiling = "1.0.3"
 log = "0.4.14"
@@ -29,6 +28,7 @@ obj = "0.10.2"
 ddsfile = "0.4.0"
 noise = "0.7.0"
 
+legion = {version = "0.4.0", features = ["extended-tuple-impls"]}
 tui = { version = "0.16.0", default-features=false, features = ["crossterm"] }
 bytemuck = { version = "1.7.2", features = ["derive"] }
 cgmath = {version = "0.18.0", features = ["serde"]}
@@ -43,5 +43,6 @@ tui-debugger = { path = "../tui-debugger" }
 reflection-tui = { path = "../reflection-tui" }
 antigen-winit = { path = "../antigen-winit" }
 antigen-wgpu = { path = "../antigen-wgpu" }
+antigen-components = { path = "../antigen-components" }
 remote-channel = { path = "../remote-channel" }
 lazy = { path = "../lazy" }

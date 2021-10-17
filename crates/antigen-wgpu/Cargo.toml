@@ -10,6 +10,7 @@ futures = "0.3.17"
 crossbeam-channel = "0.5.1"
 serde = "1.0.130"
 legion = "0.4.0"
+parking_lot = "0.11.2"
 
 atomic-id = { path = "../atomic-id" }
 antigen-winit = { path = "../antigen-winit" }

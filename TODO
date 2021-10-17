@@ -1,3 +1,12 @@
+* antigen-winit
+    [✓] Investigate storing window handle inside component
+        Currently no way to query or modify from the game thread
+        Send + Sync with no mut methods - can use Arc<Window>
+    [ ] Refactor based on window handle living inside component
+        May allow for structural improvements
+    [ ] Implement component-cached on-change systems for window properties
+        Some properties (ex. fullscreen) will allow state to be read directly
+
 * antigen-wgpu
     [✓] Refactor to use cube renderer approach
         Currently trying to store pass-private data generally (bind groups, pipelines)
@@ -6,9 +15,24 @@
         Reimplement cube, triangle renderers as structs w/Renderer trait
         Expose buffer IDs in state struct so ECS can modify via request
     [✓] Create lazy-loading abstraction to ease renderer implementation
-    [>] Pass surface config instead of format to reduce entity id passing
+    [✓] Pass surface config instead of format to reduce entity id passing
+    [✓] Investigate storing surface config as thread-safe reference instead of clone
+        Better to have a single source of truth, but is likely to complicate threading
+    [ ] Factor buffer storage out of WgpuManager
+        Cube renderer proves this isn't needed
+        More in-line with recommended middleware pattern
+    [ ] Refactor example renderers following structural changes
+    [ ] Setup data pipeline for mesh instancing
+        Shadow renderer is a good starting point
+    [ ] Setup data pipeline for mesh loading / generation / GPU upload
+    [ ] Setup data pipeline for texture loading / generation / GPU upload
+    [ ] Support shared renderer state
+        i.e. being able to render per-surface perspectives with one RenderPassComponent
+    [ ] Support on-change updates
+        Window / surface size, aspect ratio, matrices, etc.
     [ ] Support staging buffer for data uploads
         Need to recall after the encoder is submitted
+        Requires async spawn or device.poll()
         Separate codepath for renderers that need control over the encoder?
             Redraw mode enum in window component?
                 Always redraw / shared encoder
