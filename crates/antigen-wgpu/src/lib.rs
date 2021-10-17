@@ -403,7 +403,7 @@ pub fn create_surfaces(
     #[resource] wgpu_requester: &WgpuRequester,
 ) {
     let entity = *entity;
-    if let WindowState::Valid(_, window) = window.state() {
+    if let WindowState::Valid(window) = window.state() {
         if let SurfaceState::Invalid = surface.state() {
             surface.set_pending();
 

@@ -17,7 +17,7 @@ pub type WinitResponder = RemoteResponder<WindowManager, EventLoopWindowTarget<(
 pub enum WindowState {
     Invalid,
     Pending,
-    Valid(WindowId, Arc<Window>),
+    Valid(Arc<Window>),
     Closed,
 }
 
@@ -52,8 +52,8 @@ impl serde::Serialize for WindowComponent {
         match &self.state {
             WindowState::Invalid => s.serialize_field("state", "Invalid")?,
             WindowState::Pending => s.serialize_field("state", "Pending")?,
-            WindowState::Valid(window_id, window) => {
-                s.serialize_field("state", &format!("Valid({:?}: {:#?})", window_id, window))?
+            WindowState::Valid(window) => {
+                s.serialize_field("state", &format!("Valid({:#?})", window))?
             }
             WindowState::Closed => s.serialize_field("state", "Closed")?,
         }
@@ -72,16 +72,8 @@ impl<'de> serde::Deserialize<'de> for WindowComponent {
 }
 
 impl WindowComponent {
-    pub fn id(&self) -> Option<WindowId> {
-        if let WindowState::Valid(window_id, _) = self.state {
-            Some(window_id)
-        } else {
-            None
-        }
-    }
-
     pub fn window(&self) -> Option<&Arc<Window>> {
-        if let WindowState::Valid(_, window) = &self.state {
+        if let WindowState::Valid(window) = &self.state {
             Some(window)
         } else {
             None
@@ -108,8 +100,8 @@ impl WindowComponent {
         self.state = WindowState::Pending;
     }
 
-    pub fn set_valid(&mut self, window_id: WindowId, window: Arc<Window>) {
-        self.state = WindowState::Valid(window_id, window);
+    pub fn set_valid(&mut self, window: Arc<Window>) {
+        self.state = WindowState::Valid(window);
     }
 
     pub fn set_closed(&mut self) {
@@ -194,7 +186,7 @@ pub fn create_windows(
             Box::new(move |world: &mut World| {
                 if let Some(mut entry) = world.entry(entity) {
                     if let Ok(component) = entry.get_component_mut::<WindowComponent>() {
-                        component.set_valid(window_id, window);
+                        component.set_valid(window);
                     }
                 }
             })
@@ -203,12 +195,9 @@ pub fn create_windows(
 }
 
 #[legion::system(par_for_each)]
-pub fn name_windows(
-    name: &antigen_components::Name,
-    window_component: &mut WindowComponent,
-) {
+pub fn name_windows(name: &antigen_components::Name, window_component: &mut WindowComponent) {
     match window_component.state() {
-        WindowState::Valid(_, window) => {
+        WindowState::Valid(window) => {
             if window_component.prev_name() != Some(&***name) {
                 window.set_title(name);
                 window_component.set_prev_name(Some((***name).into()));
