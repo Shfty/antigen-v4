@@ -1,4 +1,5 @@
 use legion::{systems::Builder, Entity, World};
+use on_change::OnChangeTrait;
 
 use crate::{
     components::{

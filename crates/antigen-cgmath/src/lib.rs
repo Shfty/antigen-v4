@@ -1,6 +1,8 @@
 pub mod components;
 pub mod systems;
 
+pub use cgmath;
+
 #[rustfmt::skip]
 #[allow(unused)]
 pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(

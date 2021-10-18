@@ -5,13 +5,14 @@ use antigen_cgmath::components::{
 use antigen_components::{Image, ImageComponent};
 use antigen_wgpu::{
     components::{
-        RenderPassComponent, SurfaceComponent, TextureComponent, TextureWrite,
-        UniformBufferComponent, UniformWrite,
+        BufferComponent, BufferWrite, RenderPassComponent, SurfaceComponent, TextureComponent,
+        TextureWrite,
     },
     WgpuManager,
 };
 use antigen_winit::components::{RedrawMode, RedrawModeComponent, WindowComponent, WindowTitle};
 use legion::{Entity, World};
+use on_change::OnChange;
 
 use crate::renderers::{
     boids::BoidsRenderer, bunnymark::BunnymarkRenderer,
@@ -21,10 +22,16 @@ use crate::renderers::{
     water::WaterRenderer,
 };
 
-type UniformWriteViewProjectionMatrix = UniformWrite<ViewProjectionMatrix>;
-legion_debugger::register_component!(UniformWriteViewProjectionMatrix);
+type BufferWriteViewProjectionMatrix =
+    BufferWrite<ViewProjectionMatrix, antigen_cgmath::cgmath::Matrix4<f32>>;
+type BufferWriteVertices =
+    BufferWrite<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>;
+type BufferWriteIndices = BufferWrite<crate::renderers::cube::Indices, Vec<u16>>;
+type TextureWriteImageComponent = TextureWrite<ImageComponent, Image>;
 
-type TextureWriteImageComponent = TextureWrite<ImageComponent>;
+legion_debugger::register_component!(BufferWriteVertices);
+legion_debugger::register_component!(BufferWriteIndices);
+legion_debugger::register_component!(BufferWriteViewProjectionMatrix);
 legion_debugger::register_component!(TextureWriteImageComponent);
 
 pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {
@@ -42,26 +49,28 @@ pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) ->
     ))
 }
 
-pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {
+pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, Entity) {
     // Cube renderer
     let cube_renderer = CubeRenderer::new(wgpu_manager);
     let uniform_buffer_component =
-        UniformBufferComponent::from(cube_renderer.take_uniform_buffer_handle());
+        BufferComponent::from(cube_renderer.take_uniform_buffer_handle());
+
     let texture_component = TextureComponent::from(cube_renderer.take_texture_handle());
+    let vertex_buffer_component = BufferComponent::from(cube_renderer.take_vertex_buffer_handle());
+    let index_buffer_component = BufferComponent::from(cube_renderer.take_index_buffer_handle());
 
     let cube_pass_id = wgpu_manager.add_render_pass(Box::new(cube_renderer));
 
     let mut cube_pass_component = RenderPassComponent::default();
     cube_pass_component.add_render_pass(cube_pass_id);
 
-    world.push((
+    let cube_renderer_entity = world.push((
         WindowComponent::default(),
         WindowTitle::from("Cube"),
         RedrawModeComponent::from(RedrawMode::MainEventsClearedLoop),
         SurfaceComponent::default(),
         cube_pass_component,
         uniform_buffer_component,
-        texture_component,
         EyePosition(cgmath::Point3::new(0.0, 0.0, 5.0)),
         LookAt::default(),
         UpVector::default(),
@@ -73,9 +82,31 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {
         FarPlane::default(),
         ProjectionMatrix::default(),
         ViewProjectionMatrix::default(),
-        UniformWrite::<ViewProjectionMatrix>::new(None, None, 0),
+        BufferWrite::<ViewProjectionMatrix, antigen_cgmath::cgmath::Matrix4<f32>>::new(
+            None, None, 0,
+        ),
+    ));
+
+    let (vertices, indices) = CubeRenderer::create_vertices();
+
+    let vertices_entity = world.push((
+        crate::renderers::cube::Vertices::new(vertices),
+        vertex_buffer_component,
+        BufferWrite::<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>::new(
+            None, None, 0,
+        ),
+    ));
+
+    let indices_entity = world.push((
+        crate::renderers::cube::Indices::new(indices),
+        index_buffer_component,
+        BufferWrite::<crate::renderers::cube::Indices, Vec<u16>>::new(None, None, 0),
+    ));
+
+    // Mandelbrot texture
+    let texture_entity = world.push((
         ImageComponent::from(Image::mandelbrot_r8(256)),
-        TextureWrite::<ImageComponent>::new(
+        TextureWrite::<ImageComponent, Image>::new(
             None,
             None,
             wgpu::ImageDataLayout {
@@ -89,7 +120,10 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {
                 depth_or_array_layers: 1,
             },
         ),
-    ))
+        texture_component,
+    ));
+
+    (cube_renderer_entity, texture_entity)
 }
 
 pub fn msaa_lines_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {

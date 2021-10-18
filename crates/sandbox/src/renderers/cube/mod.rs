@@ -1,17 +1,21 @@
 use antigen_wgpu::{RenderPass, WgpuManager};
 use bytemuck::{Pod, Zeroable};
-use cgmath::Zero;
 use lazy::Lazy;
+use on_change::{OnChange, OnChangeTrait};
 use std::{borrow::Cow, sync::Arc};
-use wgpu::{BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, Device, RenderPipeline, ShaderModuleDescriptor, ShaderSource, Texture, TextureFormat, VertexBufferLayout, util::DeviceExt};
+use wgpu::{
+    util::DeviceExt, BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer,
+    BufferDescriptor, Device, RenderPipeline, ShaderModuleDescriptor, ShaderSource, Texture,
+    TextureFormat, VertexBufferLayout,
+};
 
 use antigen_resources::Timing;
 
 use antigen_cgmath::components::{EyePosition, FieldOfView, LookAt};
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-struct Vertex {
+#[derive(Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
+pub struct Vertex {
     _pos: [f32; 4],
     _tex_coord: [f32; 2],
 }
@@ -23,11 +27,45 @@ fn vertex(pos: [i8; 3], tc: [i8; 2]) -> Vertex {
     }
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Vertices(pub OnChange<Vec<Vertex>>);
+
+impl Vertices {
+    pub fn new(vertices: Vec<Vertex>) -> Self {
+        Vertices(OnChange::new_dirty(vertices))
+    }
+}
+
+impl OnChangeTrait<Vec<Vertex>> for Vertices {
+    fn take_change(&self) -> Option<&Vec<Vertex>> {
+        self.0.take_change()
+    }
+}
+
+legion_debugger::register_component!(Vertices);
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Indices(pub OnChange<Vec<u16>>);
+
+impl Indices {
+    pub fn new(indices: Vec<u16>) -> Self {
+        Indices(OnChange::new_dirty(indices))
+    }
+}
+
+impl OnChangeTrait<Vec<u16>> for Indices {
+    fn take_change(&self) -> Option<&Vec<u16>> {
+        self.0.take_change()
+    }
+}
+
+legion_debugger::register_component!(Indices);
+
 pub struct CubeRenderer {
     bind_group: BindGroup,
 
-    vertex_buffer: Buffer,
-    index_buffer: Buffer,
+    vertex_buffer: Arc<Buffer>,
+    index_buffer: Arc<Buffer>,
     uniform_buffer: Arc<Buffer>,
 
     texture: Arc<Texture>,
@@ -88,22 +126,21 @@ impl CubeRenderer {
     pub fn new(wgpu_manager: &WgpuManager) -> Self {
         // Fetch resources
         let device = wgpu_manager.device();
-        let queue = wgpu_manager.queue();
 
         // Create vertex and index buffers
-        let (vertex_data, index_data) = Self::create_vertices();
-
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let vertex_buffer = Arc::new(device.create_buffer(&BufferDescriptor {
             label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertex_data),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+            size: (std::mem::size_of::<Vertex>() * 24) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
 
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let index_buffer = Arc::new(device.create_buffer(&BufferDescriptor {
             label: Some("Index Buffer"),
-            contents: bytemuck::cast_slice(&index_data),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+            size: (std::mem::size_of::<u16>() * 36) as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
 
         // Create pipeline layout
         let bind_group_layout =
@@ -117,7 +154,6 @@ impl CubeRenderer {
 
         // Create the texture
         let size = 256u32;
-        let texels = Self::create_texels(size as usize);
         let texture_extent = wgpu::Extent3d {
             width: size,
             height: size,
@@ -134,29 +170,13 @@ impl CubeRenderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         }));
 
-        /*
-        queue.write_texture(
-            texture.as_image_copy(),
-            &texels,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(std::num::NonZeroU32::new(size).unwrap()),
-                rows_per_image: None,
-            },
-            texture_extent,
-        );
-        */
-
         // Create uniform buffer
-        let mx_total = cgmath::Matrix4::zero();
-        let mx_ref: &[f32; 16] = mx_total.as_ref();
-        let uniform_buffer = Arc::new(device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor {
-                label: Some("Uniform Buffer"),
-                contents: bytemuck::cast_slice(mx_ref),
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            },
-        ));
+        let uniform_buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: std::mem::size_of::<cgmath::Matrix4<f32>>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
 
         // Create texture view
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -260,6 +280,14 @@ impl CubeRenderer {
         }
     }
 
+    pub fn take_vertex_buffer_handle(&self) -> Arc<Buffer> {
+        self.vertex_buffer.clone()
+    }
+
+    pub fn take_index_buffer_handle(&self) -> Arc<Buffer> {
+        self.index_buffer.clone()
+    }
+
     pub fn take_uniform_buffer_handle(&self) -> Arc<Buffer> {
         self.uniform_buffer.clone()
     }
@@ -268,7 +296,7 @@ impl CubeRenderer {
         self.texture.clone()
     }
 
-    fn create_vertices() -> (Vec<Vertex>, Vec<u16>) {
+    pub fn create_vertices() -> (Vec<Vertex>, Vec<u16>) {
         let vertex_data = [
             // top (0, 0, 1)
             vertex([-1, -1, 1], [0, 0]),
@@ -302,7 +330,7 @@ impl CubeRenderer {
             vertex([1, -1, -1], [0, 1]),
         ];
 
-        let index_data: &[u16] = &[
+        let index_data = [
             0, 1, 2, 2, 3, 0, // top
             4, 5, 6, 6, 7, 4, // bottom
             8, 9, 10, 10, 11, 8, // right

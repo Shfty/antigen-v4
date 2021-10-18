@@ -9,12 +9,13 @@ use wgpu::{Queue, SurfaceConfiguration};
 
 use crate::{
     components::{
-        RenderPassComponent, SurfaceComponent, TextureComponent, TextureWrite,
-        UniformBufferComponent, UniformWrite,
+        BufferComponent, BufferWrite, RenderPassComponent, SurfaceComponent, TextureComponent,
+        TextureWrite,
     },
-    RenderPassState, SurfaceState, TextureData, WgpuRequester,
+    CastSlice, RenderPassState, SurfaceState, WgpuRequester,
 };
 use antigen_winit::WindowState;
+use on_change::OnChangeTrait;
 
 #[legion::system(par_for_each)]
 pub fn create_surfaces(
@@ -80,58 +81,53 @@ pub fn register_render_passes(
 
 #[legion::system(par_for_each)]
 #[read_component(T)]
-#[read_component(UniformBufferComponent)]
+#[read_component(BufferComponent)]
 #[filter(legion::maybe_changed::<T>())]
-pub fn uniform_write<T: Component + AsRef<[u8]> + Send + Sync + 'static>(
+pub fn buffer_write<
+    T: Component + OnChangeTrait<D> + Send + Sync + 'static,
+    D: CastSlice<u8> + Send + Sync + 'static,
+>(
     world: &SubWorld,
     entity: &Entity,
-    uniform_write: &UniformWrite<T>,
+    buffer_write: &BufferWrite<T, D>,
     #[resource] queue: &Arc<Queue>,
 ) {
-    let from = uniform_write.from_entity().unwrap_or(entity);
-    let to = uniform_write.to_entity().unwrap_or(entity);
-
-    let value = <&T>::query().get(world, *from).unwrap().as_ref();
-    let uniform_buffer = <&UniformBufferComponent>::query()
-        .get(world, *to)
-        .unwrap()
-        .as_ref();
-
-    queue.write_buffer(
-        uniform_buffer,
-        uniform_write.offset(),
-        bytemuck::cast_slice(value),
-    );
+    let from = buffer_write.from_entity().unwrap_or(entity);
+    if let Ok(value) = <&T>::query().get(world, *from) {
+        let to = buffer_write.to_entity().unwrap_or(entity);
+        if let Ok(uniform_buffer) = <&BufferComponent>::query().get(world, *to) {
+            if let Some(value) = value.take_change() {
+                queue.write_buffer(uniform_buffer, buffer_write.offset(), value.cast_slice());
+            }
+        }
+    }
 }
 
 #[legion::system(par_for_each)]
 #[read_component(T)]
 #[read_component(TextureComponent)]
 #[filter(legion::maybe_changed::<T>())]
-pub fn texture_write<T: Component + TextureData + Send + Sync + 'static>(
+pub fn texture_write<
+    T: Component + OnChangeTrait<D> + Send + Sync + 'static,
+    D: CastSlice<u8> + Send + Sync + 'static,
+>(
     world: &SubWorld,
     entity: &Entity,
-    texture_write: &TextureWrite<T>,
+    texture_write: &TextureWrite<T, D>,
     #[resource] queue: &Arc<Queue>,
 ) {
     let from = texture_write.from_entity().unwrap_or(entity);
-    let to = texture_write.to_entity().unwrap_or(entity);
+    if let Ok(value) = <&T>::query().get(world, *from) {
+        let to = texture_write.to_entity().unwrap_or(entity);
+        if let Ok(texture) = <&TextureComponent>::query().get(world, *to) {
+            if let Some(value) = value.take_change() {
+                let data = value.cast_slice();
+                let data_layout = *texture_write.data_layout();
+                let extent = *texture_write.extent();
 
-    let value = <&T>::query().get(world, *from).unwrap();
-    if value.is_dirty() {
-        value.set_dirty(false);
-
-        let data = value.texture_data();
-
-        let texture = <&TextureComponent>::query()
-            .get(world, *to)
-            .unwrap()
-            .as_ref();
-
-        let data_layout = *texture_write.data_layout();
-        let extent = *texture_write.extent();
-
-        queue.write_texture(texture.as_image_copy(), data, data_layout, extent);
+                queue.write_texture(texture.as_image_copy(), data, data_layout, extent);
+            }
+        }
     }
 }
 

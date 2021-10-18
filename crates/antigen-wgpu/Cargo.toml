@@ -19,3 +19,4 @@ antigen-cgmath = { path = "../antigen-cgmath" }
 antigen-components = { path = "../antigen-components" }
 remote-channel = { path = "../remote-channel" }
 legion-debugger = { path = "../legion-debugger" }
+on-change = { path = "../on-change" }

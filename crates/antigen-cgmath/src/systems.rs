@@ -49,7 +49,7 @@ pub fn orthographic_projection(
 pub fn view_projection_matrix(
     projection_matrix: Option<&ProjectionMatrix>,
     view_matrix: Option<&ViewMatrix>,
-    view_projection_matrix: &mut ViewProjectionMatrix,
+    ViewProjectionMatrix(matrix): &mut ViewProjectionMatrix,
 ) {
     let mx_total = cgmath::Matrix4::<f32>::identity();
 
@@ -66,6 +66,6 @@ pub fn view_projection_matrix(
     };
 
     let mx_total = OPENGL_TO_WGPU_MATRIX * mx_total;
-    **view_projection_matrix = mx_total;
+    matrix.set_checked(mx_total);
 }
 

@@ -43,3 +43,4 @@ antigen-resources = { path = "../antigen-resources" }
 antigen-cgmath = { path = "../antigen-cgmath" }
 remote-channel = { path = "../remote-channel" }
 lazy = { path = "../lazy" }
+on-change = { path = "../on-change" }

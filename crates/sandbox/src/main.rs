@@ -10,7 +10,7 @@ mod systems;
 use antigen_cgmath::components::ViewProjectionMatrix;
 use antigen_components::{Image, ImageComponent};
 use antigen_resources::Timing;
-use antigen_wgpu::{components::UniformWrite, WgpuManager, WgpuRequester, WgpuResponder};
+use antigen_wgpu::{WgpuManager, WgpuRequester, WgpuResponder};
 
 use components::*;
 use resources::*;
@@ -40,6 +40,7 @@ use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoopWindowTarget},
 };
+use on_change::OnChange;
 
 const GAME_TICK_HZ: f64 = 60.0;
 const GAME_TICK_SECS: f64 = 1.0 / GAME_TICK_HZ;
@@ -187,8 +188,9 @@ fn main() {
         .add_system(antigen_cgmath::systems::perspective_projection_system())
         .flush()
         .add_system(antigen_cgmath::systems::view_projection_matrix_system())
-        .add_system(antigen_wgpu::systems::uniform_write_system::<
+        .add_system(antigen_wgpu::systems::buffer_write_system::<
             ViewProjectionMatrix,
+            antigen_cgmath::cgmath::Matrix4<f32>,
         >())
         .build();
 
@@ -232,10 +234,19 @@ fn game_thread<'a>(
             .add_system(antigen_cgmath::systems::perspective_projection_system())
             .flush()
             .add_system(antigen_cgmath::systems::view_projection_matrix_system())
-            .add_system(antigen_wgpu::systems::uniform_write_system::<
-                ViewProjectionMatrix,
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                renderers::cube::Vertices,
+                Vec<renderers::cube::Vertex>,
             >())
-            .add_system(antigen_wgpu::systems::texture_write_system::<ImageComponent>());
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                renderers::cube::Indices,
+                Vec<u16>,
+            >())
+            .add_system(antigen_wgpu::systems::texture_write_system::<ImageComponent, Image>())
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                ViewProjectionMatrix,
+                antigen_cgmath::cgmath::Matrix4<f32>,
+            >());
 
         let mut schedule = builder.build();
 

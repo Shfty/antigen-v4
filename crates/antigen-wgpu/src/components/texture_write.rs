@@ -1,21 +1,22 @@
 use std::marker::PhantomData;
 
 use legion::Entity;
+use on_change::OnChangeTrait;
 use serde::ser::SerializeStruct;
 use wgpu::{Extent3d, ImageDataLayout};
 
-use crate::TextureData;
+use crate::CastSlice;
 
 #[derive(Debug, Copy, Clone)]
-pub struct TextureWrite<T: TextureData> {
+pub struct TextureWrite<T: OnChangeTrait<D>, D: CastSlice<u8>> {
     from: Option<Entity>,
     to: Option<Entity>,
     data_layout: ImageDataLayout,
     extent: Extent3d,
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<(T, D)>,
 }
 
-impl<T: TextureData> serde::Serialize for TextureWrite<T> {
+impl<T: OnChangeTrait<D>, D: CastSlice<u8>> serde::Serialize for TextureWrite<T, D> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
@@ -27,16 +28,16 @@ impl<T: TextureData> serde::Serialize for TextureWrite<T> {
     }
 }
 
-impl<'de, T: TextureData> serde::Deserialize<'de> for TextureWrite<T> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+impl<'de, T: OnChangeTrait<D>, D: CastSlice<u8>> serde::Deserialize<'de> for TextureWrite<T, D> {
+    fn deserialize<DE>(deserializer: DE) -> Result<Self, DE::Error>
     where
-        D: serde::Deserializer<'de>,
+        DE: serde::Deserializer<'de>,
     {
         unimplemented!()
     }
 }
 
-impl<T: TextureData> TextureWrite<T> {
+impl<T: OnChangeTrait<D>, D: CastSlice<u8>> TextureWrite<T, D> {
     pub fn new(
         from: Option<Entity>,
         to: Option<Entity>,

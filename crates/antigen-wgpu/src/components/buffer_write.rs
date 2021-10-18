@@ -2,18 +2,20 @@ use std::marker::PhantomData;
 
 use legion::Entity;
 use wgpu::BufferAddress;
+use crate::CastSlice;
+use on_change::{OnChange, OnChangeTrait};
 
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
-pub struct UniformWrite<T: AsRef<[u8]>> {
+pub struct BufferWrite<T: OnChangeTrait<D>, D: CastSlice<u8>> {
     from: Option<Entity>,
     to: Option<Entity>,
     offset: BufferAddress,
-    _phantom: PhantomData<T>,
+    _phantom: PhantomData<(T, D)>,
 }
 
-impl<T: AsRef<[u8]>> UniformWrite<T> {
+impl<T: OnChangeTrait<D>, D: CastSlice<u8>> BufferWrite<T, D> {
     pub fn new(from: Option<Entity>, to: Option<Entity>, offset: BufferAddress) -> Self {
-        UniformWrite {
+        BufferWrite {
             from,
             to,
             offset,
@@ -33,4 +35,3 @@ impl<T: AsRef<[u8]>> UniformWrite<T> {
         self.offset
     }
 }
-

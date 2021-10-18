@@ -1,5 +1,11 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
+/// A thread-safe wrapper type that tracks changes to its underlying data
+pub trait OnChangeTrait<T> {
+    /// Retrieve Some(T) and reset the dirty flag if it is set, or None otherwise.
+    fn take_change(&self) -> Option<&T>;
+}
+
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OnChange<T> {
@@ -49,16 +55,6 @@ impl<T> OnChange<T> {
         }
     }
 
-    /// Retrieve Some(T) and reset the dirty flag if it is set, or None otherwise.
-    pub fn take_change(&mut self) -> Option<&T> {
-        if self.dirty.load(Ordering::SeqCst) {
-            self.dirty.store(false, Ordering::SeqCst);
-            Some(&self.data)
-        } else {
-            None
-        }
-    }
-
     pub fn is_dirty(&self) -> bool {
         self.dirty.load(Ordering::SeqCst)
     }
@@ -67,3 +63,15 @@ impl<T> OnChange<T> {
         self.dirty.store(dirty, Ordering::SeqCst)
     }
 }
+
+impl<T> OnChangeTrait<T> for OnChange<T> {
+    fn take_change(&self) -> Option<&T> {
+        if self.dirty.load(Ordering::SeqCst) {
+            self.dirty.store(false, Ordering::SeqCst);
+            Some(&self.data)
+        } else {
+            None
+        }
+    }
+}
+

@@ -5,13 +5,13 @@ mod surface_state;
 mod render_pass_state;
 mod render_pass;
 mod wgpu_manager;
-mod texture_data;
+mod cast_slice;
 
 pub use surface_state::*;
 pub use render_pass::*;
 pub use wgpu_manager::*;
 pub use render_pass_state::*;
-pub use texture_data::*;
+pub use cast_slice::*;
 
 use atomic_id::atomic_id;
 use legion::World;
