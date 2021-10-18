@@ -1,4 +1,4 @@
-use std::{borrow::Cow, rc::Rc};
+use std::{borrow::Cow, sync::Arc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
 use lazy::Lazy;
@@ -19,7 +19,7 @@ pub struct BoidsRenderer {
     particle_buffers: Vec<Buffer>,
     vertices_buffer: Buffer,
     compute_pipeline: ComputePipeline,
-    render_pipeline: Lazy<RenderPipeline, (Rc<Device>, TextureFormat)>,
+    render_pipeline: Lazy<RenderPipeline, (Arc<Device>, TextureFormat)>,
     work_group_count: u32,
     frame_num: usize,
 }
@@ -110,7 +110,7 @@ impl BoidsRenderer {
             });
 
         let render_pipeline = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(&render_pipeline_layout),

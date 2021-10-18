@@ -4,6 +4,7 @@ pub struct ResourceRegistrar(
     pub fn(&legion::Resources) -> Result<Data, Error>,
 );
 
+use plugin_registry::*;
 plugin_registry::init!(ResourceRegistrar);
 
 pub fn serialize_resources(

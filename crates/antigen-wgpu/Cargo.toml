@@ -11,7 +11,11 @@ crossbeam-channel = "0.5.1"
 serde = "1.0.130"
 legion = "0.4.0"
 parking_lot = "0.11.2"
+bytemuck = "1.7.2"
 
 atomic-id = { path = "../atomic-id" }
 antigen-winit = { path = "../antigen-winit" }
+antigen-cgmath = { path = "../antigen-cgmath" }
+antigen-components = { path = "../antigen-components" }
 remote-channel = { path = "../remote-channel" }
+legion-debugger = { path = "../legion-debugger" }

@@ -1,0 +1,10 @@
+[package]
+name = "on-change"
+version = "0.1.0"
+edition = "2018"
+
+[features]
+default = []
+
+[dependencies]
+serde = { version = "1.0.130", features = ["derive"], optional = true }

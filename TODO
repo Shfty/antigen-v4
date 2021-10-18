@@ -1,11 +1,17 @@
+* on-change
+    [✓] Implement OnChange<T> wrapper struct w/state and dirty flag
+
 * antigen-winit
     [✓] Investigate storing window handle inside component
         Currently no way to query or modify from the game thread
         Send + Sync with no mut methods - can use Arc<Window>
-    [ ] Refactor based on window handle living inside component
+    [✓] Refactor based on window handle living inside component
         May allow for structural improvements
-    [ ] Implement component-cached on-change systems for window properties
+    [✓] Implement component-cached on-change systems for window properties
+        Use components to represent window properties, operate on handle via systems
+        Should refactor the Name handling into a WindowTitle component
         Some properties (ex. fullscreen) will allow state to be read directly
+    [✓] Refactor always redraw logic as a redraw mode component
 
 * antigen-wgpu
     [✓] Refactor to use cube renderer approach
@@ -18,19 +24,32 @@
     [✓] Pass surface config instead of format to reduce entity id passing
     [✓] Investigate storing surface config as thread-safe reference instead of clone
         Better to have a single source of truth, but is likely to complicate threading
-    [ ] Factor buffer storage out of WgpuManager
+    [✓] Factor buffer storage out of WgpuManager
         Cube renderer proves this isn't needed
         More in-line with recommended middleware pattern
-    [ ] Refactor example renderers following structural changes
+    [✓] Refactor example renderers following structural changes
+    [✓] Organise crate
     [ ] Setup data pipeline for mesh instancing
-        Shadow renderer is a good starting point
+        Existing renderers take a one-buffer-per-entity approach
+        Not ideal, as data upload and draw calls are a bottleneck
     [ ] Setup data pipeline for mesh loading / generation / GPU upload
-    [ ] Setup data pipeline for texture loading / generation / GPU upload
+    [>] Setup data pipeline for texture loading / generation / GPU upload
+        [✓] Image type and component for CPU-side texture data
+        [✓] Texture component for game thread data uploads
+        [✓] OnChange caching for texture data upload
+        [ ] Improve TextureData impl
+            Need to see if it can be auto-implemented based on a deref-ed / OnChange-wrapped value
+        [ ] Size / format-based lazy allocation / reallocation?
+            Seems perhaps a bit too frameworky - renderer should probably dictate format
+            Wait and see how the use case shapes up
     [ ] Support shared renderer state
-        i.e. being able to render per-surface perspectives with one RenderPassComponent
-    [ ] Support on-change updates
-        Window / surface size, aspect ratio, matrices, etc.
-    [ ] Support staging buffer for data uploads
+        i.e. being able to render multiple per-surface perspectives with one RenderPassComponent
+    [ ] Refactor existing code to use OnChange pattern
+        Surface config?
+        Aspect ratio
+        Matrices
+        etc
+    [ ] Support staging belt for data uploads
         Need to recall after the encoder is submitted
         Requires async spawn or device.poll()
         Separate codepath for renderers that need control over the encoder?
@@ -147,6 +166,7 @@
         * Print literal names for primitive types, name fields for structs
     [✓] Index enum for fetching data from collections generically
     [✓] Path enum for recursively traversing a Data tree
+    [ ] Investigate serialization issues with large Vec<u8> (256*256)
     [ ] Consider whether Path should have a unit variant to represent root / no-op
         * Probably helpful, as it aids composition
         * Allows for a Default implementation

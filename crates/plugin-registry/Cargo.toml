@@ -1,17 +1,14 @@
 [package]
 name = "plugin-registry"
 version = "0.1.0"
-authors = ["Josh Palmer <shfty@users.noreply.github.com>"]
 edition = "2018"
 
-[lib]
-proc-macro = true
-
 [features]
-registry-linkme = []
-registry-inventory = []
+registry-linkme = ["linkme", "plugin-registry-macros/registry-linkme"]
+registry-inventory = ["inventory", "plugin-registry-macros/registry-inventory"]
 
 [dependencies]
-proc-macro2 = "1.0.24"
-quote = "1.0.9"
-syn = {version = "1.0.60"}
+plugin-registry-macros = { path = "../plugin-registry-macros" }
+
+linkme = { version = "0.2.7", optional = true }
+inventory = { version = "0.1.10", optional = true }

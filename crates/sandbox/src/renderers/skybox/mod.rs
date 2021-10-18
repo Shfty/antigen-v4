@@ -1,18 +1,11 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use antigen_wgpu::{RenderPass, WgpuManager};
+use antigen_cgmath::OPENGL_TO_WGPU_MATRIX;
+
 use cgmath::SquareMatrix;
 use lazy::Lazy;
 use wgpu::{util::DeviceExt, TextureFormat, Device};
-
-#[rustfmt::skip]
-#[allow(unused)]
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
-    0.0, 0.0, 0.5, 1.0,
-);
 
 const IMAGE_SIZE: u32 = 128;
 
@@ -71,7 +64,7 @@ pub struct SkyboxRenderer {
     bind_group: wgpu::BindGroup,
     uniform_buf: wgpu::Buffer,
     entities: Vec<Entity>,
-    pipelines: Lazy<(wgpu::RenderPipeline, wgpu::RenderPipeline), (Rc<Device>, TextureFormat)>,
+    pipelines: Lazy<(wgpu::RenderPipeline, wgpu::RenderPipeline), (Arc<Device>, TextureFormat)>,
     depth_view: Option<wgpu::TextureView>,
 }
 
@@ -274,7 +267,7 @@ impl SkyboxRenderer {
         });
 
         let pipelines = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 // Create the render pipelines
                 let sky_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("Sky"),

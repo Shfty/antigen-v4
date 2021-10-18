@@ -7,6 +7,11 @@ mod renderers;
 mod resources;
 mod systems;
 
+use antigen_cgmath::components::ViewProjectionMatrix;
+use antigen_components::{Image, ImageComponent};
+use antigen_resources::Timing;
+use antigen_wgpu::{components::UniformWrite, WgpuManager, WgpuRequester, WgpuResponder};
+
 use components::*;
 use resources::*;
 use systems::*;
@@ -15,8 +20,9 @@ use crossbeam_channel::{Receiver, Sender};
 use legion_debugger::{Archetypes, Entities};
 use reflection::data::Data;
 
-use antigen_wgpu::*;
-use antigen_winit::*;
+use antigen_winit::{
+    components::RedrawMode, window_manager::WindowManager, WinitRequester, WinitResponder,
+};
 use reflection_tui::{standard_widgets, DataWidget, ReflectionWidget, ReflectionWidgetState};
 use remote_channel::*;
 use tui_debugger::{Resources as TraceResources, TuiDebugger};
@@ -35,16 +41,6 @@ use winit::{
     event_loop::{ControlFlow, EventLoopWindowTarget},
 };
 
-legion_debugger::register_component!(WindowComponent);
-legion_debugger::register_component!(SurfaceComponent);
-legion_debugger::register_component!(RenderPassComponent);
-
-type UniformWriteViewProjectionMatrix = UniformWrite<ViewProjectionMatrix>;
-legion_debugger::register_component!(UniformWriteViewProjectionMatrix);
-
-use renderers::cube::UniformBufferComponent;
-legion_debugger::register_component!(UniformBufferComponent);
-
 const GAME_TICK_HZ: f64 = 60.0;
 const GAME_TICK_SECS: f64 = 1.0 / GAME_TICK_HZ;
 
@@ -60,173 +56,17 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
 
     log::trace!("Populating entities");
 
-    /*
-    // Triangle renderer
-    let triangle_pass_id =
-        wgpu_manager.add_render_pass(Box::new(TriangleRenderer::new(&wgpu_manager)));
-
-    let mut triangle_pass_component = RenderPassComponent::default();
-    triangle_pass_component.add_render_pass(triangle_pass_id);
-
-    world.push((
-        WindowComponent::default(),
-        SurfaceComponent::default(),
-        triangle_pass_component,
-    ));
-    */
-
+    //assemblages::hello_triangle_renderer(&mut world, wgpu_manager);
     assemblages::cube_renderer(&mut world, wgpu_manager);
-
-    /*
-    // MSAA lines renderer
-    let msaa_lines_render_entity = world.push(());
-
-    let msaa_lines_pass_id =
-        wgpu_manager.add_render_pass(Box::new(MsaaLinesRenderer::new(&wgpu_manager)));
-
-    let mut msaa_lines_pass_component = RenderPassComponent::default();
-    msaa_lines_pass_component.add_render_pass(msaa_lines_pass_id);
-
-    world.push_with_id(
-        msaa_lines_render_entity,
-        (
-            WindowComponent::default(),
-            SurfaceComponent::default(),
-            msaa_lines_pass_component,
-        ),
-    );
-
-    // Boids renderer
-    let boids_render_entity = world.push(());
-
-    let boids_pass_id = wgpu_manager.add_render_pass(Box::new(BoidsRenderer::new(&wgpu_manager)));
-
-    let mut boids_pass_component = RenderPassComponent::default();
-    boids_pass_component.add_render_pass(boids_pass_id);
-
-    world.push_with_id(
-        boids_render_entity,
-        (
-            WindowComponent::always_redraw(),
-            SurfaceComponent::default(),
-            boids_pass_component,
-        ),
-    );
-
-    // Conservative raster renderer
-    let conservative_raster_pass_entity = world.push(());
-
-    let conservative_raster_pass_id =
-        wgpu_manager.add_render_pass(Box::new(ConservativeRasterRenderer::new(&wgpu_manager)));
-
-    let mut conservative_raster_pass_component = RenderPassComponent::default();
-    conservative_raster_pass_component.add_render_pass(conservative_raster_pass_id);
-
-    world.push_with_id(
-        conservative_raster_pass_entity,
-        (
-            WindowComponent::default(),
-            SurfaceComponent::default(),
-            conservative_raster_pass_component,
-        ),
-    );
-
-    // Mipmap renderer
-    let mipmap_render_entity = world.push(());
-
-    let mipmap_pass_id = wgpu_manager.add_render_pass(Box::new(MipmapRenderer::new(wgpu_manager)));
-
-    let mut mipmap_pass_component = RenderPassComponent::default();
-    mipmap_pass_component.add_render_pass(mipmap_pass_id);
-
-    world.push_with_id(
-        mipmap_render_entity,
-        (
-            WindowComponent::always_redraw(),
-            SurfaceComponent::default(),
-            mipmap_pass_component,
-        ),
-    );
-
-    // Texture array renderer
-    let texture_arrays_pass_id =
-        wgpu_manager.add_render_pass(Box::new(TextureArraysRenderer::new(&wgpu_manager)));
-
-    let mut texture_arrays_pass_component = RenderPassComponent::default();
-    texture_arrays_pass_component.add_render_pass(texture_arrays_pass_id);
-
-    world.push((
-        WindowComponent::default(),
-        SurfaceComponent::default(),
-        texture_arrays_pass_component,
-    ));
-
-    // Shadow renderer
-    let shadow_render_entity = world.push(());
-
-    let shadow_pass_id = wgpu_manager.add_render_pass(Box::new(ShadowRenderer::new(&wgpu_manager)));
-    let mut shadow_pass_component = RenderPassComponent::default();
-    shadow_pass_component.add_render_pass(shadow_pass_id);
-
-    world.push_with_id(
-        shadow_render_entity,
-        (
-            WindowComponent::always_redraw(),
-            SurfaceComponent::default(),
-            shadow_pass_component,
-        ),
-    );
-
-    // Bunnymark renderer
-    let bunnymark_render_entity = world.push(());
-
-    let bunnymark_pass_id =
-        wgpu_manager.add_render_pass(Box::new(BunnymarkRenderer::new(&wgpu_manager)));
-    let mut bunnymark_pass_component = RenderPassComponent::default();
-    bunnymark_pass_component.add_render_pass(bunnymark_pass_id);
-
-    world.push_with_id(
-        bunnymark_render_entity,
-        (
-            WindowComponent::always_redraw(),
-            SurfaceComponent::default(),
-            bunnymark_pass_component,
-        ),
-    );
-
-    // Skybox renderer
-    let skybox_pass_entity = world.push(());
-    let skybox_pass_id = wgpu_manager.add_render_pass(Box::new(SkyboxRenderer::new(&wgpu_manager)));
-
-    let mut skybox_pass_component = RenderPassComponent::default();
-    skybox_pass_component.add_render_pass(skybox_pass_id);
-
-    world.push_with_id(
-        skybox_pass_entity,
-        (
-            WindowComponent::default(),
-            SurfaceComponent::default(),
-            skybox_pass_component,
-        ),
-    );
-
-    // Water renderer
-    let water_pass_entity = world.push(());
-
-    let water_pass_id = wgpu_manager.add_render_pass(Box::new(WaterRenderer::new(&wgpu_manager)));
-
-    let mut water_pass_component = RenderPassComponent::default();
-    water_pass_component.add_render_pass(water_pass_id);
-
-    world.push_with_id(
-        water_pass_entity,
-        (
-            WindowComponent::always_redraw(),
-            SurfaceComponent::default(),
-            water_pass_component,
-        ),
-    );
-    */
+    assemblages::msaa_lines_renderer(&mut world, wgpu_manager);
+    assemblages::boids_renderer(&mut world, wgpu_manager);
+    //assemblages::conservative_raster_renderer(&mut world, wgpu_manager);
+    //assemblages::mipmap_renderer(&mut world, wgpu_manager);
+    //assemblages::texture_arrays_renderer(&mut world, wgpu_manager);
+    //assemblages::shadow_renderer(&mut world, wgpu_manager);
+    //assemblages::bunnymark_renderer(&mut world, wgpu_manager);
+    //assemblages::skybox_renderer(&mut world, wgpu_manager);
+    //assemblages::water_renderer(&mut world, wgpu_manager);
 
     // Test entity
     let entity: Entity = world.push((Position { x: 0.0, y: 0.0 }, Velocity { dx: 0.5, dy: 0.0 }));
@@ -342,12 +182,14 @@ fn main() {
     std::thread::spawn(tui_input_thread(crossterm_tx));
 
     let resize_schedule = Schedule::builder()
-        .add_system(renderers::cube::aspect_ratio_system())
-        .add_system(renderers::cube::look_at_system())
-        .add_system(renderers::cube::perspective_projection_system())
+        .add_system(antigen_wgpu::systems::aspect_ratio_system())
+        .add_system(antigen_cgmath::systems::look_at_system())
+        .add_system(antigen_cgmath::systems::perspective_projection_system())
         .flush()
-        .add_system(renderers::cube::view_projection_matrix_system())
-        .add_system(renderers::cube::uniform_write_system::<ViewProjectionMatrix>())
+        .add_system(antigen_cgmath::systems::view_projection_matrix_system())
+        .add_system(antigen_wgpu::systems::uniform_write_system::<
+            ViewProjectionMatrix,
+        >())
         .build();
 
     winit::event_loop::EventLoop::new().run(winit_thread(
@@ -369,25 +211,33 @@ fn game_thread<'a>(
     queue: Arc<Queue>,
 ) -> impl FnOnce() + 'a {
     move || {
-        let mut schedule = Schedule::builder()
-            .add_system(timing_update_system(Instant::now()))
-            .flush()
-            .add_system(create_windows_system())
-            .flush()
-            .add_system(name_windows_system())
-            .add_system(create_surfaces_system())
-            .add_system(register_render_passes_system())
+        let mut builder = Schedule::builder();
+
+        builder
+            .add_system(antigen_resources::systems::timing_update_system(
+                Instant::now(),
+            ))
+            .flush();
+
+        antigen_winit::systems::systems(&mut builder);
+        antigen_wgpu::systems::systems(&mut builder);
+
+        builder
             .add_system(game_update_positions_system())
             .add_system(renderers::cube::update_look_system())
             .add_system(renderers::cube::update_projection_system())
             .flush()
-            .add_system(renderers::cube::aspect_ratio_system())
-            .add_system(renderers::cube::look_at_system())
-            .add_system(renderers::cube::perspective_projection_system())
+            .add_system(antigen_wgpu::systems::aspect_ratio_system())
+            .add_system(antigen_cgmath::systems::look_at_system())
+            .add_system(antigen_cgmath::systems::perspective_projection_system())
             .flush()
-            .add_system(renderers::cube::view_projection_matrix_system())
-            .add_system(renderers::cube::uniform_write_system::<ViewProjectionMatrix>())
-            .build();
+            .add_system(antigen_cgmath::systems::view_projection_matrix_system())
+            .add_system(antigen_wgpu::systems::uniform_write_system::<
+                ViewProjectionMatrix,
+            >())
+            .add_system(antigen_wgpu::systems::texture_write_system::<ImageComponent>());
+
+        let mut schedule = builder.build();
 
         let mut resources = shared_state.resources();
         resources.insert(winit_requester);
@@ -483,19 +333,16 @@ fn winit_thread<'a>(
                 winit_responder.receive_requests(window_target);
                 wgpu_responder.receive_requests(&());
 
-                let mut archetypes = shared_state.trace_archetypes.write();
-                let mut entities = shared_state.trace_entities.write();
-                let mut trace_resources = shared_state.trace_resources.write();
+                let archetypes = shared_state.trace_archetypes.read();
+                let entities = shared_state.trace_entities.read();
+                let trace_resources = shared_state.trace_resources.read();
 
                 let mut debugger_data = Data::Struct {
                     name: "Legion Debugger",
                     fields: vec![
-                        ("Archetypes", archetypes.archetypes_mut().unwrap().clone()),
-                        ("Entities", entities.entities_mut().unwrap().clone()),
-                        (
-                            "Resources",
-                            trace_resources.resources_mut().unwrap().clone(),
-                        ),
+                        ("Archetypes", archetypes.archetypes().unwrap().clone()),
+                        ("Entities", entities.entities().unwrap().clone()),
+                        ("Resources", trace_resources.resources().unwrap().clone()),
                     ],
                 };
 
@@ -515,9 +362,18 @@ fn winit_thread<'a>(
                     .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
 
                 let frames = winit_responder
-                    .always_redraw_windows()
-                    .flat_map(|window_id| {
+                    .window_redraw_modes()
+                    .flat_map(|(window_id, redraw_mode)| {
                         let entity = winit_responder.entity_id(&window_id).unwrap();
+
+                        match *redraw_mode {
+                            RedrawMode::MainEventsClearedRequest => {
+                                winit_responder.window(&entity).unwrap().request_redraw();
+                                return None;
+                            }
+                            RedrawMode::MainEventsClearedLoop => (),
+                            _ => return None,
+                        }
 
                         let surface = if let Some(surface) = wgpu_responder.surface(&entity) {
                             surface

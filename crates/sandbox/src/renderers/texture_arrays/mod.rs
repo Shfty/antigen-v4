@@ -1,4 +1,4 @@
-use std::{num::NonZeroU32, rc::Rc};
+use std::{num::NonZeroU32, sync::Arc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
 use lazy::Lazy;
@@ -64,7 +64,7 @@ pub struct TextureArraysRenderer {
     index_buffer: wgpu::Buffer,
     index_format: wgpu::IndexFormat,
     bind_group: wgpu::BindGroup,
-    pipeline: Lazy<wgpu::RenderPipeline, (Rc<Device>, TextureFormat)>,
+    pipeline: Lazy<wgpu::RenderPipeline, (Arc<Device>, TextureFormat)>,
     uniform_workaround: bool,
 }
 
@@ -213,7 +213,7 @@ impl TextureArraysRenderer {
         let index_format = wgpu::IndexFormat::Uint16;
 
         let pipeline = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: None,
             layout: Some(&pipeline_layout),

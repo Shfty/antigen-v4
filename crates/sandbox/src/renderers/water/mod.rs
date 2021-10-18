@@ -1,22 +1,14 @@
 mod point_gen;
 
 use antigen_wgpu::{RenderPass, WgpuManager};
+use antigen_cgmath::OPENGL_TO_WGPU_MATRIX;
 
 use bytemuck::{Pod, Zeroable};
 use cgmath::Point3;
 use lazy::Lazy;
 use rand::SeedableRng;
-use std::{borrow::Cow, mem, rc::Rc};
-use wgpu::{util::DeviceExt, TextureFormat, Device};
-
-#[rustfmt::skip]
-#[allow(unused)]
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
-    0.0, 0.0, 0.5, 1.0,
-);
+use std::{borrow::Cow, mem, sync::Arc};
+use wgpu::{util::DeviceExt, Device, TextureFormat};
 
 ///
 /// Radius of the terrain.
@@ -72,7 +64,7 @@ pub struct WaterRenderer {
     water_bind_group_layout: wgpu::BindGroupLayout,
     water_bind_group: Option<wgpu::BindGroup>,
     water_uniform_buf: wgpu::Buffer,
-    water_pipeline: Lazy<wgpu::RenderPipeline, (Rc<Device>, TextureFormat)>,
+    water_pipeline: Lazy<wgpu::RenderPipeline, (Arc<Device>, TextureFormat)>,
 
     terrain_vertex_buf: wgpu::Buffer,
     terrain_vertex_count: usize,
@@ -88,7 +80,7 @@ pub struct WaterRenderer {
     /// has been placed underwater.
     ///
     terrain_flipped_uniform_buf: wgpu::Buffer,
-    terrain_pipeline: Lazy<wgpu::RenderPipeline, (Rc<Device>, TextureFormat)>,
+    terrain_pipeline: Lazy<wgpu::RenderPipeline, (Arc<Device>, TextureFormat)>,
 
     reflect_view: Option<wgpu::TextureView>,
 
@@ -324,7 +316,7 @@ impl WaterRenderer {
         });
 
         let water_pipeline = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 // Create the render pipelines. These describe how the data will flow through the GPU, and what
                 // constraints and modifiers it will have.
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -400,7 +392,7 @@ impl WaterRenderer {
         ));
 
         let terrain_pipeline = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 // Same idea as the water pipeline.
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("terrain"),

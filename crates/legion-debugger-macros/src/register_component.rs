@@ -17,11 +17,12 @@ pub fn impl_register_component(input: Type) -> proc_macro::TokenStream {
     );
 
     let tokens = quote::quote! {
-        fn #func_name(registry: &mut legion::serialize::Registry<String>) {
+        fn #func_name(registry: &mut legion_debugger::legion::serialize::Registry<String>) {
             registry.register::<#ident>(stringify!(#ident).to_string());
         }
 
-        plugin_registry::register!(#ident, legion_debugger::ComponentRegistrar, legion_debugger::ComponentRegistrar(#func_name));
+        use legion_debugger::plugin_registry::*;
+        register!(#ident, legion_debugger::ComponentRegistrar, legion_debugger::ComponentRegistrar(#func_name));
     };
 
     tokens.into()

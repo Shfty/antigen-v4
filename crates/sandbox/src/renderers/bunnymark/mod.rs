@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use antigen_wgpu::{RenderPass, WgpuManager};
 use lazy::Lazy;
@@ -29,7 +29,7 @@ struct Locals {
 pub struct BunnymarkRenderer {
     global_group: wgpu::BindGroup,
     local_group: wgpu::BindGroup,
-    pipeline: Lazy<wgpu::RenderPipeline, (Rc<Device>, TextureFormat)>,
+    pipeline: Lazy<wgpu::RenderPipeline, (Arc<Device>, TextureFormat)>,
     bunnies: Vec<Locals>,
     local_buffer: wgpu::Buffer,
     global_buffer: wgpu::Buffer,
@@ -106,7 +106,7 @@ impl BunnymarkRenderer {
         });
 
         let pipeline = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: None,
                     layout: Some(&pipeline_layout),

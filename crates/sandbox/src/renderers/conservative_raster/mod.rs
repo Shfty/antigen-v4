@@ -1,4 +1,4 @@
-use std::{borrow::Cow, rc::Rc};
+use std::{borrow::Cow, sync::Arc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
 use lazy::Lazy;
@@ -14,8 +14,8 @@ pub struct ConservativeRasterRenderer {
     bind_group_upscale: Option<BindGroup>,
 
     pipelines_triangle:
-        Lazy<(RenderPipeline, RenderPipeline, Option<RenderPipeline>), (Rc<Device>, TextureFormat)>,
-    pipeline_upscale: Lazy<RenderPipeline, (Rc<Device>, TextureFormat)>,
+        Lazy<(RenderPipeline, RenderPipeline, Option<RenderPipeline>), (Arc<Device>, TextureFormat)>,
+    pipeline_upscale: Lazy<RenderPipeline, (Arc<Device>, TextureFormat)>,
 
     bind_group_layout_upscale: BindGroupLayout,
 
@@ -41,7 +41,7 @@ impl ConservativeRasterRenderer {
         });
 
         let pipelines = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 let pipeline_conservative =
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: Some("Conservative Rasterization"),
@@ -153,7 +153,7 @@ impl ConservativeRasterRenderer {
         });
 
         let pipeline_upscale = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("Upscale"),
                     layout: Some(&pipeline_layout_upscale),

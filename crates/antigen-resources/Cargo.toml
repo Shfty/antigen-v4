@@ -1,0 +1,12 @@
+[package]
+name = "antigen-resources"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+profiling = "1.0.3"
+legion = "0.4.0"
+
+serde = { version = "1.0.130", features = ["derive"] }
+
+legion-debugger = { path = "../legion-debugger" }

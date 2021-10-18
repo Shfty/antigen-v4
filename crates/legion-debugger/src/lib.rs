@@ -8,6 +8,10 @@ mod registry;
 pub use parser::*;
 pub use registry::*;
 
+pub use plugin_registry;
+pub use reflection;
+pub use legion;
+
 pub use legion_debugger_macros::register_component;
 pub use legion_debugger_macros::register_resource;
 

@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! atomic_id {
     ($static_ident:ident, $type_ident:ident) => {
-        static $static_ident: AtomicUsize = AtomicUsize::new(0);
+        static $static_ident: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
         #[derive(
             Debug,
@@ -20,7 +20,7 @@ macro_rules! atomic_id {
 
         impl $type_ident {
             pub fn next() -> Self {
-                $type_ident($static_ident.fetch_add(1, Ordering::Relaxed))
+                $type_ident($static_ident.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
             }
         }
         

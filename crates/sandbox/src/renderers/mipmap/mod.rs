@@ -1,21 +1,14 @@
-use std::{num::{NonZeroU32, NonZeroU8}, rc::Rc};
+use std::{num::{NonZeroU32, NonZeroU8}, rc::Rc, sync::Arc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
+use antigen_cgmath::OPENGL_TO_WGPU_MATRIX;
+
 use lazy::Lazy;
 use wgpu::{util::DeviceExt, Device, TextureFormat};
 
 const TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
 const MIP_LEVEL_COUNT: u32 = 9;
 const MIP_PASS_COUNT: u32 = MIP_LEVEL_COUNT - 1;
-
-#[rustfmt::skip]
-#[allow(unused)]
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
-    0.0, 0.0, 0.5, 1.0,
-);
 
 struct QuerySets {
     timestamp: wgpu::QuerySet,
@@ -41,7 +34,7 @@ fn pipeline_statistics_offset() -> wgpu::BufferAddress {
 
 pub struct MipmapRenderer {
     uniform_buf: Rc<wgpu::Buffer>,
-    draw_pipeline: Lazy<(wgpu::RenderPipeline, wgpu::BindGroup), (Rc<Device>, TextureFormat)>,
+    draw_pipeline: Lazy<(wgpu::RenderPipeline, wgpu::BindGroup), (Arc<Device>, TextureFormat)>,
 
     prev_width: u32,
     prev_height: u32,
@@ -225,7 +218,7 @@ impl MipmapRenderer {
 
         let ub = uniform_buf.clone();
         let draw_pipeline = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 let draw_pipeline =
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: Some("draw"),

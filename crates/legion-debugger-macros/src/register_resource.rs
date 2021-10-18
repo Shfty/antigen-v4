@@ -17,13 +17,14 @@ pub fn impl_register_resource(input: Type) -> proc_macro::TokenStream {
     );
 
     let tokens = quote::quote! {
-        fn #func_name(resources: &legion::Resources) -> Result<reflection::data::Data, reflection::serializer::Error> {
+        fn #func_name(resources: &legion_debugger::legion::Resources) -> Result<legion_debugger::reflection::data::Data, legion_debugger::reflection::serializer::Error> {
             let resource = resources.get::<#ident>().unwrap_or_else(|| panic!("No resource of type {}", stringify!(#ident)));
             let resource = &*resource;
-            reflection::to_data(resource, true)
+            legion_debugger::reflection::to_data(resource, true)
         }
 
-        plugin_registry::register!(#ident, legion_debugger::ResourceRegistrar, legion_debugger::ResourceRegistrar(#func_name));
+        use legion_debugger::plugin_registry::*;
+        register!(#ident, legion_debugger::ResourceRegistrar, legion_debugger::ResourceRegistrar(#func_name));
     };
 
     tokens.into()

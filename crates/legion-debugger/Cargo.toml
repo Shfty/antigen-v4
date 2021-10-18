@@ -4,10 +4,6 @@ edition = "2018"
 name = "legion-debugger"
 version = "0.1.0"
 
-[features]
-registry-linkme = ["linkme", "plugin-registry/registry-linkme"]
-registry-inventory = ["inventory", "plugin-registry/registry-inventory"]
-
 [dependencies]
 legion = "0.4.0"
 uuid = "0.8.2"
@@ -15,8 +11,5 @@ uuid = "0.8.2"
 tui = { version = "0.16.0", default-features=false, features = ["crossterm"] }
 
 plugin-registry = { path = "../plugin-registry" }
-linkme = { version = "0.2.6", optional = true }
-inventory = { version = "0.1.10", optional = true }
-
 reflection = { path = "../reflection" }
 legion-debugger-macros = { path = "../legion-debugger-macros" }

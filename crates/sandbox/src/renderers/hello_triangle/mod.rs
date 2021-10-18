@@ -1,10 +1,10 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use antigen_wgpu::{RenderPass, WgpuManager};
 use lazy::Lazy;
 use wgpu::RenderPipeline;
 
-type PipelineCtx = (Rc<wgpu::Device>, wgpu::TextureFormat);
+type PipelineCtx = (Arc<wgpu::Device>, wgpu::TextureFormat);
 pub struct TriangleRenderer {
     pipeline: Lazy<RenderPipeline, PipelineCtx>,
 }
@@ -25,7 +25,7 @@ impl TriangleRenderer {
         });
 
         let pipeline = Lazy::new(Box::new(
-            move |(device, format): (Rc<wgpu::Device>, wgpu::TextureFormat)| {
+            move |(device, format): (Arc<wgpu::Device>, wgpu::TextureFormat)| {
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: None,
                     layout: Some(&pipeline_layout),

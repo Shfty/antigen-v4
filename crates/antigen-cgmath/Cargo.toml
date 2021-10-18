@@ -1,0 +1,13 @@
+[package]
+name = "antigen-cgmath"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+legion = "0.4.0"
+bytemuck = "1.7.2"
+
+serde = { version = "1.0.130", features = ["derive"] }
+cgmath = { version = "0.18.0", features = ["serde"] }
+
+legion-debugger = { path = "../legion-debugger" }

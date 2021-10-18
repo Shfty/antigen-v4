@@ -1,17 +1,10 @@
-use std::{num::NonZeroU32, ops::Range, rc::Rc};
+use std::{num::NonZeroU32, ops::Range, sync::Arc, rc::Rc};
 
 use antigen_wgpu::{RenderPass, WgpuManager};
+use antigen_cgmath::OPENGL_TO_WGPU_MATRIX;
+
 use lazy::Lazy;
 use wgpu::{util::DeviceExt, TextureFormat, Device};
-
-#[rustfmt::skip]
-#[allow(unused)]
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
-    0.0, 0.0, 0.5, 1.0,
-);
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -168,7 +161,7 @@ pub struct ShadowRenderer {
     entity_bind_group: wgpu::BindGroup,
     light_storage_buf: Rc<wgpu::Buffer>,
     entity_uniform_buf: wgpu::Buffer,
-    forward_pass: Lazy<Pass, (Rc<Device>, TextureFormat)>,
+    forward_pass: Lazy<Pass, (Arc<Device>, TextureFormat)>,
     forward_depth: Option<wgpu::TextureView>,
 
     prev_width: u32,
@@ -512,7 +505,7 @@ impl ShadowRenderer {
         let lsb = light_storage_buf.clone();
         let lights_len = lights.len();
         let forward_pass = Lazy::new(Box::new(
-            move |(device, format): (Rc<Device>, TextureFormat)| {
+            move |(device, format): (Arc<Device>, TextureFormat)| {
                 // Create pipeline layout
                 let bind_group_layout =
                     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

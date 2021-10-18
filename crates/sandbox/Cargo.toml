@@ -5,9 +5,7 @@ name = "sandbox"
 version = "0.1.0"
 
 [features]
-default = ["plugin-registry-inventory", "profiling/profile-with-tracing"]
-plugin-registry-linkme = ["linkme", "legion-debugger/registry-linkme", "antigen-components/registry-linkme"]
-plugin-registry-inventory = ["inventory", "legion-debugger/registry-inventory", "antigen-components/registry-inventory"]
+default = ["plugin-registry/registry-inventory", "profiling/profile-with-tracing"]
 
 [dependencies]
 crossterm = "0.21.0"
@@ -29,12 +27,9 @@ ddsfile = "0.4.0"
 noise = "0.7.0"
 
 legion = {version = "0.4.0", features = ["extended-tuple-impls"]}
-tui = { version = "0.16.0", default-features=false, features = ["crossterm"] }
+tui = { version = "0.16.0", default-features = false, features = ["crossterm"] }
 bytemuck = { version = "1.7.2", features = ["derive"] }
 cgmath = {version = "0.18.0", features = ["serde"]}
-
-linkme = {version = "0.2.6", optional = true}
-inventory = {version = "0.1.10", optional = true}
 
 plugin-registry = { path = "../plugin-registry" }
 reflection = { path = "../reflection" }
@@ -44,5 +39,7 @@ reflection-tui = { path = "../reflection-tui" }
 antigen-winit = { path = "../antigen-winit" }
 antigen-wgpu = { path = "../antigen-wgpu" }
 antigen-components = { path = "../antigen-components" }
+antigen-resources = { path = "../antigen-resources" }
+antigen-cgmath = { path = "../antigen-cgmath" }
 remote-channel = { path = "../remote-channel" }
 lazy = { path = "../lazy" }

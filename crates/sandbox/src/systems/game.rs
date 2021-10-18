@@ -1,4 +1,5 @@
-use crate::{Timing, Position, Velocity};
+use crate::{Position, Velocity};
+use antigen_resources::Timing;
 
 use legion::system;
 

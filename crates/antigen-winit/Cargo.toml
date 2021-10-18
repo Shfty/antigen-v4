@@ -4,11 +4,14 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-winit = "0.25.0"
 serde = "1.0.126"
 legion = "0.4.0"
 crossbeam-channel = "0.5.1"
-antigen-components = { path = "../antigen-components" }
 
+winit = { version = "0.25.0", features = ["serde"] }
+
+antigen-components = { path = "../antigen-components" }
 atomic-id = { path = "../atomic-id" }
 remote-channel = { path = "../remote-channel" }
+legion-debugger = { path = "../legion-debugger" }
+on-change = { path = "../on-change", features = ["serde"] }
