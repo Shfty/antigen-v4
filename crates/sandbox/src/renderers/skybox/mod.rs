@@ -34,7 +34,7 @@ const MODEL_CENTER_Y: f32 = 2.0;
 impl Camera {
     fn to_uniform_data(&self) -> [f32; 16 * 3 + 4] {
         let aspect = self.screen_size.0 as f32 / self.screen_size.1 as f32;
-        let mx_projection = cgmath::perspective(cgmath::Deg(45f32), aspect, 1.0, 50.0);
+        let mx_projection = cgmath::perspective(cgmath::Deg(45f32), aspect, 1.0, 600.0);
         let cam_pos = cgmath::Point3::new(
             self.angle_xz.cos() * self.angle_y.sin() * self.dist,
             self.angle_xz.sin() * self.dist + MODEL_CENTER_Y,
@@ -77,7 +77,7 @@ impl SkyboxRenderer {
 
         let mut entities = Vec::new();
         {
-            let source = include_bytes!("models/teslacyberv3.0.obj");
+            let source = include_bytes!("models/marauder.obj");
             let data = obj::ObjData::load_buf(&source[..]).unwrap();
             let mut vertices = Vec::new();
             for object in data.objects {
@@ -155,7 +155,7 @@ impl SkyboxRenderer {
             screen_size: (1, 1),
             angle_xz: 0.2,
             angle_y: 0.2,
-            dist: 30.0,
+            dist: 500.0,
         };
         let raw_uniforms = camera.to_uniform_data();
         let uniform_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

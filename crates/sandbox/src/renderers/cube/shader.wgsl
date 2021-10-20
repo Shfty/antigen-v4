@@ -1,3 +1,15 @@
+struct VertexInput {
+    [[location(0)]] position: vec4<f32>;
+    [[location(1)]] tex_coord: vec2<f32>;
+};
+
+struct InstanceInput {
+    [[location(2)]] mx_0: vec4<f32>;
+    [[location(3)]] mx_1: vec4<f32>;
+    [[location(4)]] mx_2: vec4<f32>;
+    [[location(5)]] mx_3: vec4<f32>;
+};
+
 struct VertexOutput {
     [[location(0)]] tex_coord: vec2<f32>;
     [[builtin(position)]] position: vec4<f32>;
@@ -7,17 +19,24 @@ struct VertexOutput {
 struct Locals {
     transform: mat4x4<f32>;
 };
+
 [[group(0), binding(0)]]
 var<uniform> r_locals: Locals;
 
 [[stage(vertex)]]
 fn vs_main(
-    [[location(0)]] position: vec4<f32>,
-    [[location(1)]] tex_coord: vec2<f32>,
+    model: VertexInput,
+    instance: InstanceInput,
 ) -> VertexOutput {
+    var model_matrix = mat4x4<f32>(
+        instance.mx_0,
+        instance.mx_1,
+        instance.mx_2,
+        instance.mx_3,
+    );
     var out: VertexOutput;
-    out.tex_coord = tex_coord;
-    out.position = r_locals.transform * position;
+    out.tex_coord = model.tex_coord;
+    out.position = r_locals.transform * model_matrix * model.position;
     return out;
 }
 

@@ -29,25 +29,31 @@
         More in-line with recommended middleware pattern
     [✓] Refactor example renderers following structural changes
     [✓] Organise crate
-    [ ] Setup data pipeline for mesh instancing
+    [>] Setup data pipeline for mesh instancing
         Existing renderers take a one-buffer-per-entity approach
         Not ideal, as data upload and draw calls are a bottleneck
-    [ ] Setup data pipeline for mesh loading / generation / GPU upload
-    [>] Setup data pipeline for texture loading / generation / GPU upload
+    [>] Setup data pipeline for multiple meshes
+        Upload all meshes in one set of buffers
+        Call draw_indexed_indirect once per mesh w/indirect offset
+    [✓] Setup data pipeline for mesh loading / generation / GPU upload
+    [✓] Setup data pipeline for texture loading / generation / GPU upload
         [✓] Image type and component for CPU-side texture data
         [✓] Texture component for game thread data uploads
         [✓] OnChange caching for texture data upload
-        [ ] Improve TextureData impl
+        [✓] Improve TextureData impl
             Need to see if it can be auto-implemented based on a deref-ed / OnChange-wrapped value
         [ ] Size / format-based lazy allocation / reallocation?
             Seems perhaps a bit too frameworky - renderer should probably dictate format
             Wait and see how the use case shapes up
+    [ ] Support decoupled physics interpolation
+        [ ] Camera
+        [ ] Instances
     [ ] Support shared renderer state
         i.e. being able to render multiple per-surface perspectives with one RenderPassComponent
     [ ] Refactor existing code to use OnChange pattern
-        Surface config?
-        Aspect ratio
-        Matrices
+        [✓] Matrices
+        [ ] Surface config?
+        [ ] Aspect ratio
         etc
     [ ] Support staging belt for data uploads
         Need to recall after the encoder is submitted

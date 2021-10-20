@@ -1,10 +1,11 @@
-use antigen_wgpu::{RenderPass, WgpuManager};
+use antigen_wgpu::{CastSlice, RenderPass, WgpuManager};
 use bytemuck::{Pod, Zeroable};
 use lazy::Lazy;
 use on_change::{OnChange, OnChangeTrait};
 use std::{borrow::Cow, sync::Arc};
 use wgpu::{
-    util::DeviceExt, BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer,
+    util::{BufferInitDescriptor, DeviceExt},
+    BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, BufferAddress,
     BufferDescriptor, Device, RenderPipeline, ShaderModuleDescriptor, ShaderSource, Texture,
     TextureFormat, VertexBufferLayout,
 };
@@ -12,6 +13,7 @@ use wgpu::{
 use antigen_resources::Timing;
 
 use antigen_cgmath::components::{EyePosition, FieldOfView, LookAt};
+use antigen_wgpu::DrawIndexedIndirect;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
@@ -20,10 +22,10 @@ pub struct Vertex {
     _tex_coord: [f32; 2],
 }
 
-fn vertex(pos: [i8; 3], tc: [i8; 2]) -> Vertex {
+fn vertex(pos: [f32; 3], tc: [f32; 2]) -> Vertex {
     Vertex {
-        _pos: [pos[0] as f32, pos[1] as f32, pos[2] as f32, 1.0],
-        _tex_coord: [tc[0] as f32, tc[1] as f32],
+        _pos: [pos[0], pos[1], pos[2], 1.0],
+        _tex_coord: [tc[0], tc[1]],
     }
 }
 
@@ -44,33 +46,88 @@ impl OnChangeTrait<Vec<Vertex>> for Vertices {
 
 legion_debugger::register_component!(Vertices);
 
+#[repr(C)]
+#[derive(Default, Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
+pub struct Instance {
+    _trx: [f32; 16],
+}
+
+impl CastSlice<u8> for Instance {
+    fn cast_slice(&self) -> &[u8] {
+        bytemuck::cast_slice(&self._trx)
+    }
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct Indices(pub OnChange<Vec<u16>>);
+pub struct InstanceComponent(pub OnChange<Instance>);
+
+impl InstanceComponent {
+    pub fn new(mx: cgmath::Matrix4<f32>) -> Self {
+        let mx: [f32; 16] = *mx.as_ref();
+        InstanceComponent(OnChange::new_dirty(Instance { _trx: mx }))
+    }
+}
+
+impl OnChangeTrait<Instance> for InstanceComponent {
+    fn take_change(&self) -> Option<&Instance> {
+        self.0.take_change()
+    }
+}
+
+legion_debugger::register_component!(InstanceComponent);
+
+pub type Index = u16;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct Indices(pub OnChange<Vec<Index>>);
 
 impl Indices {
-    pub fn new(indices: Vec<u16>) -> Self {
+    pub fn new(indices: Vec<Index>) -> Self {
         Indices(OnChange::new_dirty(indices))
     }
 }
 
-impl OnChangeTrait<Vec<u16>> for Indices {
-    fn take_change(&self) -> Option<&Vec<u16>> {
+impl OnChangeTrait<Vec<Index>> for Indices {
+    fn take_change(&self) -> Option<&Vec<Index>> {
         self.0.take_change()
     }
 }
 
 legion_debugger::register_component!(Indices);
 
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct IndexedIndirectComponent(pub OnChange<DrawIndexedIndirect>);
+
+impl IndexedIndirectComponent {
+    pub fn new(indirect: DrawIndexedIndirect) -> Self {
+        IndexedIndirectComponent(OnChange::new_dirty(indirect))
+    }
+}
+
+impl OnChangeTrait<DrawIndexedIndirect> for IndexedIndirectComponent {
+    fn take_change(&self) -> Option<&DrawIndexedIndirect> {
+        self.0.take_change()
+    }
+}
+
+legion_debugger::register_component!(IndexedIndirectComponent);
+
 pub struct CubeRenderer {
     bind_group: BindGroup,
 
     vertex_buffer: Arc<Buffer>,
     index_buffer: Arc<Buffer>,
+
     uniform_buffer: Arc<Buffer>,
+    indirect_buffer: Arc<Buffer>,
+
+    instance_buffer: Arc<Buffer>,
 
     texture: Arc<Texture>,
 
     pipelines: Lazy<(RenderPipeline, Option<RenderPipeline>), (Arc<Device>, TextureFormat)>,
+
+    indirect_count: BufferAddress,
 }
 
 impl CubeRenderer {
@@ -106,39 +163,89 @@ impl CubeRenderer {
         source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
     };
 
-    const VERTEX_BUFFER_LAYOUTS: [VertexBufferLayout<'static>; 1] = [VertexBufferLayout {
-        array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x4,
-                offset: 0,
-                shader_location: 0,
-            },
-            wgpu::VertexAttribute {
-                format: wgpu::VertexFormat::Float32x2,
-                offset: 4 * 4,
-                shader_location: 1,
-            },
-        ],
-    }];
+    const VERTEX_BUFFER_LAYOUTS: [VertexBufferLayout<'static>; 2] = [
+        VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 4 * 4,
+                    shader_location: 1,
+                },
+            ],
+        },
+        VertexBufferLayout {
+            array_stride: std::mem::size_of::<Instance>() as BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 0,
+                    shader_location: 2,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 4 * 4,
+                    shader_location: 3,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 4 * 4 * 2,
+                    shader_location: 4,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 4 * 4 * 3,
+                    shader_location: 5,
+                },
+            ],
+        },
+    ];
 
-    pub fn new(wgpu_manager: &WgpuManager) -> Self {
+    pub fn new(
+        wgpu_manager: &WgpuManager,
+        vertex_count: BufferAddress,
+        index_count: BufferAddress,
+        indirect_count: BufferAddress,
+        instance_count: BufferAddress,
+    ) -> Self {
         // Fetch resources
         let device = wgpu_manager.device();
 
-        // Create vertex and index buffers
+        // Create vertex, index, indirect and instance buffers
         let vertex_buffer = Arc::new(device.create_buffer(&BufferDescriptor {
             label: Some("Vertex Buffer"),
-            size: (std::mem::size_of::<Vertex>() * 24) as wgpu::BufferAddress,
+            size: std::mem::size_of::<Vertex>() as BufferAddress * vertex_count,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
 
         let index_buffer = Arc::new(device.create_buffer(&BufferDescriptor {
             label: Some("Index Buffer"),
-            size: (std::mem::size_of::<u16>() * 36) as wgpu::BufferAddress,
+            size: std::mem::size_of::<Index>() as BufferAddress * index_count,
             usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+
+        let indirect_buffer = Arc::new(device.create_buffer(&BufferDescriptor {
+            label: Some("Indirect Buffer"),
+            size: std::mem::size_of::<DrawIndexedIndirect>() as BufferAddress
+                * indirect_count as BufferAddress,
+            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
+
+        let instance_buffer = Arc::new(device.create_buffer(&BufferDescriptor {
+            label: Some("Instance Buffer"),
+            size: std::mem::size_of::<Instance>() as BufferAddress
+                * instance_count as BufferAddress,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
 
@@ -173,7 +280,7 @@ impl CubeRenderer {
         // Create uniform buffer
         let uniform_buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<cgmath::Matrix4<f32>>() as wgpu::BufferAddress,
+            size: std::mem::size_of::<cgmath::Matrix4<f32>>() as BufferAddress,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
@@ -275,8 +382,11 @@ impl CubeRenderer {
             vertex_buffer,
             index_buffer,
             uniform_buffer,
+            instance_buffer,
+            indirect_buffer,
             texture,
             pipelines,
+            indirect_count,
         }
     }
 
@@ -292,44 +402,54 @@ impl CubeRenderer {
         self.uniform_buffer.clone()
     }
 
+    pub fn take_instance_buffer_handle(&self) -> Arc<Buffer> {
+        self.instance_buffer.clone()
+    }
+
+    pub fn take_indirect_buffer_handle(&self) -> Arc<Buffer> {
+        self.indirect_buffer.clone()
+    }
+
     pub fn take_texture_handle(&self) -> Arc<Texture> {
         self.texture.clone()
     }
 
-    pub fn create_vertices() -> (Vec<Vertex>, Vec<u16>) {
+    pub fn cube_vertices() -> (Vec<Vertex>, Vec<Index>) {
+        #[rustfmt::skip]
         let vertex_data = [
             // top (0, 0, 1)
-            vertex([-1, -1, 1], [0, 0]),
-            vertex([1, -1, 1], [1, 0]),
-            vertex([1, 1, 1], [1, 1]),
-            vertex([-1, 1, 1], [0, 1]),
-            // bottom (0, 0, -1)
-            vertex([-1, 1, -1], [1, 0]),
-            vertex([1, 1, -1], [0, 0]),
-            vertex([1, -1, -1], [0, 1]),
-            vertex([-1, -1, -1], [1, 1]),
-            // right (1, 0, 0)
-            vertex([1, -1, -1], [0, 0]),
-            vertex([1, 1, -1], [1, 0]),
-            vertex([1, 1, 1], [1, 1]),
-            vertex([1, -1, 1], [0, 1]),
-            // left (-1, 0, 0)
-            vertex([-1, -1, 1], [1, 0]),
-            vertex([-1, 1, 1], [0, 0]),
-            vertex([-1, 1, -1], [0, 1]),
-            vertex([-1, -1, -1], [1, 1]),
-            // front (0, 1, 0)
-            vertex([1, 1, -1], [1, 0]),
-            vertex([-1, 1, -1], [0, 0]),
-            vertex([-1, 1, 1], [0, 1]),
-            vertex([1, 1, 1], [1, 1]),
-            // back (0, -1, 0)
-            vertex([1, -1, 1], [0, 0]),
-            vertex([-1, -1, 1], [1, 0]),
-            vertex([-1, -1, -1], [1, 1]),
-            vertex([1, -1, -1], [0, 1]),
+            vertex([-0.5, -0.5, 0.5], [0.0, 0.0]),
+            vertex([0.5, -0.5, 0.5], [1.0, 0.0]),
+            vertex([0.5, 0.5, 0.5], [1.0, 1.0]),
+            vertex([-0.5, 0.5, 0.5], [0.0, 1.0]),
+            // bottom (0, 0, -0.5)
+            vertex([-0.5, 0.5, -0.5], [1.0, 0.0]),
+            vertex([0.5, 0.5, -0.5], [0.0, 0.0]),
+            vertex([0.5, -0.5, -0.5], [0.0, 1.0]),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0]),
+            // right (0.5, 0, 0)
+            vertex([0.5, -0.5, -0.5], [0.0, 0.0]),
+            vertex([0.5, 0.5, -0.5], [1.0, 0.0]),
+            vertex([0.5, 0.5, 0.5], [1.0, 1.0]),
+            vertex([0.5, -0.5, 0.5], [0.0, 1.0]),
+            // left (-0.5, 0, 0)
+            vertex([-0.5, -0.5, 0.5], [1.0, 0.0]),
+            vertex([-0.5, 0.5, 0.5], [0.0, 0.0]),
+            vertex([-0.5, 0.5, -0.5], [0.0, 1.0]),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0]),
+            // front (0, 0.5, 0)
+            vertex([0.5, 0.5, -0.5], [1.0, 0.0]),
+            vertex([-0.5, 0.5, -0.5], [0.0, 0.0]),
+            vertex([-0.5, 0.5, 0.5], [0.0, 1.0]),
+            vertex([0.5, 0.5, 0.5], [1.0, 1.0]),
+            // back (0, -0.5, 0)
+            vertex([0.5, -0.5, 0.5], [0.0, 0.0]),
+            vertex([-0.5, -0.5, 0.5], [1.0, 0.0]),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0]),
+            vertex([0.5, -0.5, -0.5], [0.0, 1.0]),
         ];
 
+        #[rustfmt::skip]
         let index_data = [
             0, 1, 2, 2, 3, 0, // top
             4, 5, 6, 6, 7, 4, // bottom
@@ -337,6 +457,31 @@ impl CubeRenderer {
             12, 13, 14, 14, 15, 12, // left
             16, 17, 18, 18, 19, 16, // front
             20, 21, 22, 22, 23, 20, // back
+        ];
+
+        (vertex_data.to_vec(), index_data.to_vec())
+    }
+
+    pub fn tetrahedron_vertices() -> (Vec<Vertex>, Vec<Index>) {
+        let a = 1.0f32 / 3.0;
+        let b = (8.0f32 / 9.0).sqrt();
+        let c = (2.0f32 / 9.0).sqrt();
+        let d = (2.0f32 / 3.0).sqrt();
+
+        #[rustfmt::skip]
+        let vertex_data = [
+            vertex([0.0, 0.0, 1.0], [0.0, 0.0]),
+            vertex([-c, d, -a], [1.0, 0.0]),
+            vertex([-c, -d, -a], [1.0, 1.0]),
+            vertex([b, 0.0, a], [0.0, 1.0]),
+        ];
+
+        #[rustfmt::skip]
+        let index_data = [
+            0, 1, 2,
+            0, 2, 3,
+            0, 3, 1,
+            3, 2, 1,
         ];
 
         (vertex_data.to_vec(), index_data.to_vec())
@@ -358,6 +503,25 @@ impl CubeRenderer {
                 count
             })
             .collect()
+    }
+
+    fn create_instances() -> Vec<Instance> {
+        let mut instances = vec![];
+
+        let count = 1;
+        for x in -count..=count {
+            for y in -count..=count {
+                for z in -count..=count {
+                    let mx = cgmath::Matrix4::<f32>::from_translation(cgmath::Vector3::new(
+                        x as f32, y as f32, z as f32,
+                    ));
+                    let mx: [f32; 16] = *mx.as_ref();
+                    instances.push(Instance { _trx: mx })
+                }
+            }
+        }
+
+        instances
     }
 }
 
@@ -397,13 +561,26 @@ impl RenderPass for CubeRenderer {
         rpass.set_bind_group(0, &self.bind_group, &[]);
         rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
         rpass.pop_debug_group();
+
         rpass.insert_debug_marker("Draw!");
-        rpass.draw_indexed(0..36, 0, 0..1);
+        rpass.draw_indexed_indirect(&self.indirect_buffer, 0);
+        for i in 0..self.indirect_count {
+            rpass.draw_indexed_indirect(
+                &self.indirect_buffer,
+                std::mem::size_of::<DrawIndexedIndirect>() as BufferAddress * i,
+            );
+        }
 
         if let Some(wire_pipeline) = wire_pipeline {
             rpass.set_pipeline(wire_pipeline);
-            rpass.draw_indexed(0..36, 0, 0..1);
+            for i in 0..self.indirect_count {
+                rpass.draw_indexed_indirect(
+                    &self.indirect_buffer,
+                    std::mem::size_of::<DrawIndexedIndirect>() as BufferAddress * i,
+                );
+            }
         }
     }
 }

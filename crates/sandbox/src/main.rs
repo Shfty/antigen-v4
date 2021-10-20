@@ -13,6 +13,7 @@ use antigen_resources::Timing;
 use antigen_wgpu::{WgpuManager, WgpuRequester, WgpuResponder};
 
 use components::*;
+use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent};
 use resources::*;
 use systems::*;
 
@@ -32,23 +33,24 @@ use parking_lot::{Mutex, RwLock};
 use std::{
     any::TypeId,
     cell::RefCell,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 use wgpu::{Queue, SurfaceTexture};
 use winit::{
-    event::{Event, WindowEvent},
+    event::{Event as WinitEvent, WindowEvent},
     event_loop::{ControlFlow, EventLoopWindowTarget},
 };
-use on_change::OnChange;
 
 const GAME_TICK_HZ: f64 = 60.0;
 const GAME_TICK_SECS: f64 = 1.0 / GAME_TICK_HZ;
 
 const INPUT_TICK_HZ: f64 = 1000.0;
 const INPUT_TICK_SECS: f64 = 1.0 / INPUT_TICK_HZ;
-
-thread_local!(static MAIN_THREAD: RefCell<bool> = false.into());
 
 #[profiling::function]
 fn build_world(wgpu_manager: &WgpuManager) -> World {
@@ -59,8 +61,8 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
 
     //assemblages::hello_triangle_renderer(&mut world, wgpu_manager);
     assemblages::cube_renderer(&mut world, wgpu_manager);
-    assemblages::msaa_lines_renderer(&mut world, wgpu_manager);
-    assemblages::boids_renderer(&mut world, wgpu_manager);
+    //assemblages::msaa_lines_renderer(&mut world, wgpu_manager);
+    //assemblages::boids_renderer(&mut world, wgpu_manager);
     //assemblages::conservative_raster_renderer(&mut world, wgpu_manager);
     //assemblages::mipmap_renderer(&mut world, wgpu_manager);
     //assemblages::texture_arrays_renderer(&mut world, wgpu_manager);
@@ -124,8 +126,6 @@ impl SharedState for Shared {
 }
 
 fn main() {
-    MAIN_THREAD.with(|f| *f.borrow_mut() = true);
-
     profiling::scope!("Main");
 
     let shared_state = Shared::default();
@@ -173,14 +173,30 @@ fn main() {
 
     let (wgpu_requester, wgpu_responder) = remote_channel(wgpu_manager);
 
-    std::thread::spawn(game_thread(
+    let main_loop_break = Arc::new(AtomicBool::new(false));
+
+    let game_thread_handle = std::thread::spawn(game_thread(
         world.clone(),
         shared_state.clone(),
         winit_requester,
         wgpu_requester,
         queue,
+        main_loop_break.clone(),
     ));
-    std::thread::spawn(tui_input_thread(crossterm_tx));
+
+    let tui_input_thread_handle =
+        std::thread::spawn(tui_input_thread(crossterm_tx, main_loop_break.clone()));
+    let tui_render_thread_handle = std::thread::spawn(tui_render_thread(
+        shared_state,
+        crossterm_rx,
+        main_loop_break.clone(),
+    ));
+
+    let join_handles = vec![
+        game_thread_handle,
+        tui_input_thread_handle,
+        tui_render_thread_handle,
+    ];
 
     let resize_schedule = Schedule::builder()
         .add_system(antigen_wgpu::systems::aspect_ratio_system())
@@ -196,12 +212,12 @@ fn main() {
 
     winit::event_loop::EventLoop::new().run(winit_thread(
         world,
-        shared_state.clone(),
-        crossterm_rx,
         winit_responder,
         wgpu_responder,
         Some(resize_schedule),
         None,
+        main_loop_break,
+        join_handles,
     ));
 }
 
@@ -211,6 +227,7 @@ fn game_thread<'a>(
     winit_requester: WinitRequester,
     wgpu_requester: WgpuRequester,
     queue: Arc<Queue>,
+    main_loop_break: Arc<AtomicBool>,
 ) -> impl FnOnce() + 'a {
     move || {
         let mut builder = Schedule::builder();
@@ -242,7 +259,18 @@ fn game_thread<'a>(
                 renderers::cube::Indices,
                 Vec<u16>,
             >())
-            .add_system(antigen_wgpu::systems::texture_write_system::<ImageComponent, Image>())
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                renderers::cube::InstanceComponent,
+                renderers::cube::Instance,
+            >())
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                renderers::cube::IndexedIndirectComponent,
+                antigen_wgpu::DrawIndexedIndirect,
+            >())
+            .add_system(antigen_wgpu::systems::texture_write_system::<
+                ImageComponent,
+                Image,
+            >())
             .add_system(antigen_wgpu::systems::buffer_write_system::<
                 ViewProjectionMatrix,
                 antigen_cgmath::cgmath::Matrix4<f32>,
@@ -258,6 +286,11 @@ fn game_thread<'a>(
 
         let tick_duration = Duration::from_secs_f64(GAME_TICK_SECS);
         loop {
+            if main_loop_break.load(Ordering::Relaxed) {
+                println!("Game thread break");
+                break
+            }
+
             let timestamp = Instant::now();
 
             let mut world = world.lock();
@@ -286,74 +319,68 @@ fn game_thread<'a>(
 }
 
 #[profiling::function]
-fn tui_input_thread(sender: Sender<crossterm::event::Event>) -> impl FnOnce() {
+fn tui_input_thread(
+    sender: Sender<CrosstermEvent>,
+    main_loop_break: Arc<AtomicBool>,
+) -> impl FnOnce() {
     move || {
         let tick_duration = Duration::from_secs_f64(INPUT_TICK_SECS);
-        loop {
+        'thread: loop {
             let timestamp = Instant::now();
-            crossterm_poll_input(&sender);
+            while let Ok(true) = crossterm::event::poll(Duration::default()) {
+                let event = crossterm::event::read().unwrap();
+                if let CrosstermEvent::Key(KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: crossterm::event::KeyModifiers::CONTROL,
+                }) = event
+                {
+                    main_loop_break.store(true, Ordering::Relaxed);
+                    break 'thread;
+                }
+                sender.send(event).ok();
+            }
             while timestamp.elapsed() < tick_duration {}
         }
     }
 }
 
 #[profiling::function]
-fn winit_thread<'a>(
-    world: Arc<Mutex<World>>,
+fn tui_render_thread(
     shared_state: Shared,
-    crossterm_rx: Receiver<crossterm::event::Event>,
-    mut winit_responder: WinitResponder,
-    mut wgpu_responder: WgpuResponder,
-    mut resize_schedule: Option<Schedule>,
-    mut close_schedule: Option<Schedule>,
-) -> impl FnMut(Event<()>, &EventLoopWindowTarget<()>, &mut ControlFlow) + 'a {
-    // Both winit and crossterm/tui must run on the main thread
-    MAIN_THREAD.with(|f| {
-        assert!(
-            *f.borrow(),
-            "winit_thread may only be called from the main thread"
-        )
-    });
-
-    let mut main_loop_state = MainLoopState::default();
-    let mut crossterm_event_queue = CrosstermEventQueue::default();
+    crossterm_rx: Receiver<CrosstermEvent>,
+    main_loop_break: Arc<AtomicBool>,
+) -> impl FnOnce() {
     let mut tui_debugger = TuiDebugger::start().unwrap();
+    let mut crossterm_event_queue = CrosstermEventQueue::default();
     let mut reflection_widget_state = ReflectionWidgetState::None;
 
-    let mut resources = Resources::default();
-    resources.insert(wgpu_responder.queue());
+    move || loop {
+        if main_loop_break.load(Ordering::Relaxed) {
+            break;
+        }
 
-    move |event: Event<()>,
-          window_target: &EventLoopWindowTarget<()>,
-          control_flow: &mut ControlFlow| {
-        profiling::scope!("Winit Event Loop");
+        crossterm_input_buffer_fill(&crossterm_rx, &mut crossterm_event_queue);
+        for event in crossterm_event_queue.iter() {
+            reflection_widget_state.handle_input(event);
+        }
+        crossterm_input_buffer_clear(&mut crossterm_event_queue);
 
-        *control_flow = ControlFlow::Poll;
+        {
+            let archetypes = shared_state.trace_archetypes.read();
+            let entities = shared_state.trace_entities.read();
+            let trace_resources = shared_state.trace_resources.read();
 
-        match event {
-            Event::MainEventsCleared => {
-                profiling::scope!("MainEventsCleared");
-
-                crossterm_input_buffer_fill(&crossterm_rx, &mut crossterm_event_queue);
-                crossterm_quit_on_ctrl_c(&crossterm_event_queue, &mut main_loop_state);
-                for event in crossterm_event_queue.iter() {
-                    reflection_widget_state.handle_input(event);
-                }
-                crossterm_input_buffer_clear(&mut crossterm_event_queue);
-
-                winit_responder.receive_requests(window_target);
-                wgpu_responder.receive_requests(&());
-
-                let archetypes = shared_state.trace_archetypes.read();
-                let entities = shared_state.trace_entities.read();
-                let trace_resources = shared_state.trace_resources.read();
-
+            if let (Some(archetypes), Some(entities), Some(resources)) = (
+                archetypes.archetypes(),
+                entities.entities(),
+                trace_resources.resources(),
+            ) {
                 let mut debugger_data = Data::Struct {
                     name: "Legion Debugger",
                     fields: vec![
-                        ("Archetypes", archetypes.archetypes().unwrap().clone()),
-                        ("Entities", entities.entities().unwrap().clone()),
-                        ("Resources", trace_resources.resources().unwrap().clone()),
+                        ("Archetypes", archetypes.clone()),
+                        ("Entities", entities.clone()),
+                        ("Resources", resources.clone()),
                     ],
                 };
 
@@ -367,6 +394,39 @@ fn winit_thread<'a>(
                         )
                     })
                     .unwrap();
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(16));
+    }
+}
+
+#[profiling::function]
+fn winit_thread<'a>(
+    world: Arc<Mutex<World>>,
+    mut winit_responder: WinitResponder,
+    mut wgpu_responder: WgpuResponder,
+    mut resize_schedule: Option<Schedule>,
+    mut close_schedule: Option<Schedule>,
+    main_loop_break: Arc<AtomicBool>,
+    mut join_handles: Vec<JoinHandle<()>>,
+) -> impl FnMut(WinitEvent<()>, &EventLoopWindowTarget<()>, &mut ControlFlow) + 'a {
+    let mut resources = Resources::default();
+    resources.insert(wgpu_responder.queue());
+
+    move |event: WinitEvent<()>,
+          window_target: &EventLoopWindowTarget<()>,
+          control_flow: &mut ControlFlow| {
+        profiling::scope!("Winit Event Loop");
+
+        *control_flow = ControlFlow::Poll;
+
+        match event {
+            WinitEvent::MainEventsCleared => {
+                profiling::scope!("MainEventsCleared");
+
+                winit_responder.receive_requests(window_target);
+                wgpu_responder.receive_requests(&());
 
                 let mut encoder = wgpu_responder
                     .device()
@@ -416,11 +476,14 @@ fn winit_thread<'a>(
                     .for_each(drop);
 
                 // Exit if requested by the main loop state
-                if let MainLoopState::Break = main_loop_state {
+                if main_loop_break.load(Ordering::Relaxed) {
+                    for join_handle in join_handles.drain(..)  {
+                        join_handle.join().unwrap();
+                    }
                     *control_flow = ControlFlow::Exit;
                 }
             }
-            Event::RedrawRequested(window_id) => {
+            WinitEvent::RedrawRequested(window_id) => {
                 profiling::scope!("RedrawRequested");
 
                 let mut encoder = wgpu_responder
@@ -449,7 +512,7 @@ fn winit_thread<'a>(
 
                 frame.present();
             }
-            Event::WindowEvent { window_id, event } => match event {
+            WinitEvent::WindowEvent { window_id, event } => match event {
                 WindowEvent::Resized(size) => {
                     profiling::scope!("WindowEvent::Resized");
                     let entity = winit_responder

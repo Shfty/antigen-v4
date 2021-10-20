@@ -95,9 +95,9 @@ pub fn buffer_write<
     let from = buffer_write.from_entity().unwrap_or(entity);
     if let Ok(value) = <&T>::query().get(world, *from) {
         let to = buffer_write.to_entity().unwrap_or(entity);
-        if let Ok(uniform_buffer) = <&BufferComponent>::query().get(world, *to) {
+        if let Ok(buffer) = <&BufferComponent>::query().get(world, *to) {
             if let Some(value) = value.take_change() {
-                queue.write_buffer(uniform_buffer, buffer_write.offset(), value.cast_slice());
+                queue.write_buffer(buffer, buffer_write.offset(), value.cast_slice());
             }
         }
     }

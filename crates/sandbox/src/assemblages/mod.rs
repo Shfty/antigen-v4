@@ -12,7 +12,7 @@ use antigen_wgpu::{
 };
 use antigen_winit::components::{RedrawMode, RedrawModeComponent, WindowComponent, WindowTitle};
 use legion::{Entity, World};
-use on_change::OnChange;
+use wgpu::BufferAddress;
 
 use crate::renderers::{
     boids::BoidsRenderer, bunnymark::BunnymarkRenderer,
@@ -27,11 +27,19 @@ type BufferWriteViewProjectionMatrix =
 type BufferWriteVertices =
     BufferWrite<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>;
 type BufferWriteIndices = BufferWrite<crate::renderers::cube::Indices, Vec<u16>>;
+type BufferWriteInstances =
+    BufferWrite<crate::renderers::cube::InstanceComponent, crate::renderers::cube::Instance>;
+type BufferWriteIndirect = BufferWrite<
+    crate::renderers::cube::IndexedIndirectComponent,
+    antigen_wgpu::DrawIndexedIndirect,
+>;
 type TextureWriteImageComponent = TextureWrite<ImageComponent, Image>;
 
 legion_debugger::register_component!(BufferWriteVertices);
 legion_debugger::register_component!(BufferWriteIndices);
+legion_debugger::register_component!(BufferWriteInstances);
 legion_debugger::register_component!(BufferWriteViewProjectionMatrix);
+legion_debugger::register_component!(BufferWriteIndirect);
 legion_debugger::register_component!(TextureWriteImageComponent);
 
 pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {
@@ -50,14 +58,31 @@ pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) ->
 }
 
 pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, Entity) {
+    let (tetrahedron_vertices, tetrahedron_indices) = CubeRenderer::tetrahedron_vertices();
+    let (cube_vertices, cube_indices) = CubeRenderer::cube_vertices();
+
+    let tetrahedron_count = 16u32;
+    let cube_count = 16u32;
+
     // Cube renderer
-    let cube_renderer = CubeRenderer::new(wgpu_manager);
+    let cube_renderer = CubeRenderer::new(
+        wgpu_manager,
+        (tetrahedron_vertices.len() + cube_vertices.len()) as BufferAddress,
+        (tetrahedron_indices.len() + cube_indices.len()) as BufferAddress,
+        2,
+        (tetrahedron_count + cube_count) as BufferAddress,
+    );
+
     let uniform_buffer_component =
         BufferComponent::from(cube_renderer.take_uniform_buffer_handle());
 
-    let texture_component = TextureComponent::from(cube_renderer.take_texture_handle());
     let vertex_buffer_component = BufferComponent::from(cube_renderer.take_vertex_buffer_handle());
     let index_buffer_component = BufferComponent::from(cube_renderer.take_index_buffer_handle());
+    let instance_buffer_component =
+        BufferComponent::from(cube_renderer.take_instance_buffer_handle());
+    let indirect_buffer_component =
+        BufferComponent::from(cube_renderer.take_indirect_buffer_handle());
+    let texture_component = TextureComponent::from(cube_renderer.take_texture_handle());
 
     let cube_pass_id = wgpu_manager.add_render_pass(Box::new(cube_renderer));
 
@@ -87,20 +112,127 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
         ),
     ));
 
-    let (vertices, indices) = CubeRenderer::create_vertices();
+    let vertex_buffer_entity = world.push((vertex_buffer_component,));
+    let index_buffer_entity = world.push((index_buffer_component,));
+    let instance_buffer_entity = world.push((instance_buffer_component,));
+    let indirect_buffer_entity = world.push((indirect_buffer_component,));
 
-    let vertices_entity = world.push((
-        crate::renderers::cube::Vertices::new(vertices),
-        vertex_buffer_component,
+    // Tetrahedron mesh
+    let tetrahedron_vertices_entity = world.push((
+        crate::renderers::cube::Vertices::new(tetrahedron_vertices),
         BufferWrite::<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>::new(
-            None, None, 0,
+            None,
+            Some(vertex_buffer_entity),
+            0,
         ),
     ));
 
-    let indices_entity = world.push((
-        crate::renderers::cube::Indices::new(indices),
-        index_buffer_component,
-        BufferWrite::<crate::renderers::cube::Indices, Vec<u16>>::new(None, None, 0),
+    let tetrahedron_indices_entity = world.push((
+        crate::renderers::cube::Indices::new(tetrahedron_indices),
+        BufferWrite::<crate::renderers::cube::Indices, Vec<u16>>::new(
+            None,
+            Some(index_buffer_entity),
+            0,
+        ),
+    ));
+
+    // Cube mesh
+    let cube_vertices_entity = world.push((
+        crate::renderers::cube::Vertices::new(cube_vertices),
+        BufferWrite::<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>::new(
+            None,
+            Some(vertex_buffer_entity),
+            (std::mem::size_of::<crate::renderers::cube::Vertex>() * 4) as wgpu::BufferAddress,
+        ),
+    ));
+
+    let cube_indices_entity = world.push((
+        crate::renderers::cube::Indices::new(cube_indices),
+        BufferWrite::<crate::renderers::cube::Indices, Vec<u16>>::new(
+            None,
+            Some(index_buffer_entity),
+            (std::mem::size_of::<u16>() * 12) as wgpu::BufferAddress,
+        ),
+    ));
+
+    // Instances
+    let mut dir = cgmath::Vector4::unit_x();
+    for i in 0..tetrahedron_count {
+        let foo: cgmath::Vector3<f32> = dir.xyz();
+        world.push((
+            crate::renderers::cube::InstanceComponent::new(
+                cgmath::Matrix4::<f32>::from_translation(foo * 3.0),
+            ),
+            BufferWrite::<
+                crate::renderers::cube::InstanceComponent,
+                crate::renderers::cube::Instance,
+            >::new(
+                None,
+                Some(instance_buffer_entity),
+                std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
+                    * i as wgpu::BufferAddress,
+            ),
+        ));
+
+        dir = cgmath::Matrix4::from_angle_z(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
+    }
+
+    let mut dir = cgmath::Vector4::unit_z();
+    for i in 0..cube_count {
+        let foo: cgmath::Vector3<f32> = dir.xyz();
+        world.push((
+            crate::renderers::cube::InstanceComponent::new(
+                cgmath::Matrix4::<f32>::from_translation(foo * 3.0),
+            ),
+            BufferWrite::<
+                crate::renderers::cube::InstanceComponent,
+                crate::renderers::cube::Instance,
+            >::new(
+                None,
+                Some(instance_buffer_entity),
+                std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
+                    * (i + tetrahedron_count) as wgpu::BufferAddress,
+            ),
+        ));
+
+        dir = cgmath::Matrix4::from_angle_x(cgmath::Deg(360.0 / cube_count as f32)) * dir;
+    }
+
+    // Indirect draw data
+    let tetrahedron_indirect = antigen_wgpu::DrawIndexedIndirect {
+        vertex_count: 12,
+        instance_count: tetrahedron_count,
+        base_index: 0,
+        vertex_offset: 0,
+        base_instance: 0,
+    };
+
+    let tetrahedron_indirect_entity = world.push((
+        crate::renderers::cube::IndexedIndirectComponent::new(tetrahedron_indirect),
+        BufferWrite::<
+            crate::renderers::cube::IndexedIndirectComponent,
+            antigen_wgpu::DrawIndexedIndirect,
+        >::new(None, Some(indirect_buffer_entity), 0),
+    ));
+
+    let cube_indirect = antigen_wgpu::DrawIndexedIndirect {
+        vertex_count: 36,
+        instance_count: cube_count,
+        base_index: 12,
+        vertex_offset: 4,
+        base_instance: tetrahedron_count,
+    };
+
+    let cube_indirect_entity = world.push((
+        crate::renderers::cube::IndexedIndirectComponent::new(cube_indirect),
+        BufferWrite::<
+            crate::renderers::cube::IndexedIndirectComponent,
+            antigen_wgpu::DrawIndexedIndirect,
+        >::new(
+            None,
+            Some(indirect_buffer_entity),
+            (std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>()) as wgpu::BufferAddress,
+        ),
     ));
 
     // Mandelbrot texture
