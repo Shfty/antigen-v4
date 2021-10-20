@@ -29,18 +29,18 @@ type BufferWriteVertices =
 type BufferWriteIndices = BufferWrite<crate::renderers::cube::Indices, Vec<u16>>;
 type BufferWriteInstances =
     BufferWrite<crate::renderers::cube::InstanceComponent, crate::renderers::cube::Instance>;
-type BufferWriteIndirect = BufferWrite<
+type BufferWriteIndexedIndirect = BufferWrite<
     crate::renderers::cube::IndexedIndirectComponent,
     antigen_wgpu::DrawIndexedIndirect,
 >;
-type TextureWriteImageComponent = TextureWrite<ImageComponent, Image>;
+type TextureWriteImage = TextureWrite<ImageComponent, Image>;
 
 legion_debugger::register_component!(BufferWriteVertices);
 legion_debugger::register_component!(BufferWriteIndices);
 legion_debugger::register_component!(BufferWriteInstances);
 legion_debugger::register_component!(BufferWriteViewProjectionMatrix);
-legion_debugger::register_component!(BufferWriteIndirect);
-legion_debugger::register_component!(TextureWriteImageComponent);
+legion_debugger::register_component!(BufferWriteIndexedIndirect);
+legion_debugger::register_component!(TextureWriteImage);
 
 pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {
     let triangle_pass_id =
@@ -107,9 +107,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
         FarPlane::default(),
         ProjectionMatrix::default(),
         ViewProjectionMatrix::default(),
-        BufferWrite::<ViewProjectionMatrix, antigen_cgmath::cgmath::Matrix4<f32>>::new(
-            None, None, 0,
-        ),
+        BufferWriteViewProjectionMatrix::new(None, None, 0),
     ));
 
     let vertex_buffer_entity = world.push((vertex_buffer_component,));
@@ -120,26 +118,18 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
     // Tetrahedron mesh
     let tetrahedron_vertices_entity = world.push((
         crate::renderers::cube::Vertices::new(tetrahedron_vertices),
-        BufferWrite::<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>::new(
-            None,
-            Some(vertex_buffer_entity),
-            0,
-        ),
+        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
     ));
 
     let tetrahedron_indices_entity = world.push((
         crate::renderers::cube::Indices::new(tetrahedron_indices),
-        BufferWrite::<crate::renderers::cube::Indices, Vec<u16>>::new(
-            None,
-            Some(index_buffer_entity),
-            0,
-        ),
+        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
     ));
 
     // Cube mesh
     let cube_vertices_entity = world.push((
         crate::renderers::cube::Vertices::new(cube_vertices),
-        BufferWrite::<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>::new(
+        BufferWriteVertices::new(
             None,
             Some(vertex_buffer_entity),
             (std::mem::size_of::<crate::renderers::cube::Vertex>() * 4) as wgpu::BufferAddress,
@@ -148,7 +138,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
 
     let cube_indices_entity = world.push((
         crate::renderers::cube::Indices::new(cube_indices),
-        BufferWrite::<crate::renderers::cube::Indices, Vec<u16>>::new(
+        BufferWriteIndices::new(
             None,
             Some(index_buffer_entity),
             (std::mem::size_of::<u16>() * 12) as wgpu::BufferAddress,
@@ -163,10 +153,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
             crate::renderers::cube::InstanceComponent::new(
                 cgmath::Matrix4::<f32>::from_translation(foo * 3.0),
             ),
-            BufferWrite::<
-                crate::renderers::cube::InstanceComponent,
-                crate::renderers::cube::Instance,
-            >::new(
+            BufferWriteInstances::new(
                 None,
                 Some(instance_buffer_entity),
                 std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
@@ -184,10 +171,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
             crate::renderers::cube::InstanceComponent::new(
                 cgmath::Matrix4::<f32>::from_translation(foo * 3.0),
             ),
-            BufferWrite::<
-                crate::renderers::cube::InstanceComponent,
-                crate::renderers::cube::Instance,
-            >::new(
+            BufferWriteInstances::new(
                 None,
                 Some(instance_buffer_entity),
                 std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
@@ -209,10 +193,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
 
     let tetrahedron_indirect_entity = world.push((
         crate::renderers::cube::IndexedIndirectComponent::new(tetrahedron_indirect),
-        BufferWrite::<
-            crate::renderers::cube::IndexedIndirectComponent,
-            antigen_wgpu::DrawIndexedIndirect,
-        >::new(None, Some(indirect_buffer_entity), 0),
+        BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
     ));
 
     let cube_indirect = antigen_wgpu::DrawIndexedIndirect {
@@ -225,10 +206,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
 
     let cube_indirect_entity = world.push((
         crate::renderers::cube::IndexedIndirectComponent::new(cube_indirect),
-        BufferWrite::<
-            crate::renderers::cube::IndexedIndirectComponent,
-            antigen_wgpu::DrawIndexedIndirect,
-        >::new(
+        BufferWriteIndexedIndirect::new(
             None,
             Some(indirect_buffer_entity),
             (std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>()) as wgpu::BufferAddress,
@@ -238,7 +216,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
     // Mandelbrot texture
     let texture_entity = world.push((
         ImageComponent::from(Image::mandelbrot_r8(256)),
-        TextureWrite::<ImageComponent, Image>::new(
+        TextureWriteImage::new(
             None,
             None,
             wgpu::ImageDataLayout {
