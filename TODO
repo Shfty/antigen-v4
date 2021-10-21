@@ -29,10 +29,10 @@
         More in-line with recommended middleware pattern
     [✓] Refactor example renderers following structural changes
     [✓] Organise crate
-    [>] Setup data pipeline for mesh instancing
+    [✓] Setup data pipeline for mesh instancing
         Existing renderers take a one-buffer-per-entity approach
         Not ideal, as data upload and draw calls are a bottleneck
-    [>] Setup data pipeline for multiple meshes
+    [✓] Setup data pipeline for multiple meshes
         Upload all meshes in one set of buffers
         Call draw_indexed_indirect once per mesh w/indirect offset
     [✓] Setup data pipeline for mesh loading / generation / GPU upload
@@ -45,6 +45,38 @@
         [ ] Size / format-based lazy allocation / reallocation?
             Seems perhaps a bit too frameworky - renderer should probably dictate format
             Wait and see how the use case shapes up
+    [ ] Refactor renderers to use middleware pattern
+        Return command buffers for submission by calling code
+        Check wgpu wiki to refresh on specifics
+    [ ] Setup instance control
+        Used fixed-size buffer allocation
+            Known number of instances and indirect draw calls
+        Hand out indices from renderer
+            One set of indices per mesh
+            Use RAII to reclaim indices when components are dropped
+                Will require storing a shared reference to the renderer's storage in the index type 
+            Return error if trying to allocate beyond instance limit for a given mesh
+                More useful than a panic for debugging overrun,
+                can measure excess instead of halting immediately
+        Use compute shader to generate indirect buffer
+            At a basic level, this means writing visible instances as draw calls
+                Specfically for dynamic instances that may change visibility
+                Use frustum culling / visibility flag as a predicate
+                Naive implementation can write one draw call per instance
+                Potential for packing instances into ranges to reduce total draw calls
+            More advanced uses can account for special-case instancing
+                Indirect buffer can be partitioned into per-behavior ranges
+                    ex. First n bytes is sector draws, remainder is dynamic objects
+                    Can this reservation be done in a generic manner?
+                        Could include a range with buffer handles distributed from renderer
+                        Would be useful to leverage the ECS for highly modular rendering
+                Sector rendering
+                    Pack linearly-connected sectors together into single meshes
+                        Use vertex offset to display a subset
+                        Visible range will always be linear
+                            Viewpoint starts in a sector and extends back / forward within buffer
+                    Update offsets by writing range start / end indices directly into indirect buffer
+                
     [ ] Support decoupled physics interpolation
         [ ] Camera
         [ ] Instances
@@ -151,6 +183,9 @@
         * Currently serializes entire world every frame
         * This will scale very badly with larger worlds
         * Need to find a way to leverage queries and events
+        * Reflection widgets will need a way to control world serialization queries
+            * Will enable coarse culling of archetypes and entities
+            * Can avoid querying completely if UI is in a state that doesn't need a given set of data
         [ ] Archetype Debugger
             [ ] Listen for archetype create / destroy events
             [ ] Maintain list of active archetypes, use to populate archetype list

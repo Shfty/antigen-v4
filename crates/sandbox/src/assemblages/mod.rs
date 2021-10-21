@@ -146,7 +146,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
     ));
 
     // Instances
-    let mut dir = cgmath::Vector4::unit_x();
+    let mut dir = cgmath::Vector4::unit_z();
     for i in 0..tetrahedron_count {
         let foo: cgmath::Vector3<f32> = dir.xyz();
         world.push((
@@ -161,10 +161,10 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
             ),
         ));
 
-        dir = cgmath::Matrix4::from_angle_z(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
+        dir = cgmath::Matrix4::from_angle_x(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
     }
 
-    let mut dir = cgmath::Vector4::unit_z();
+    let mut dir = cgmath::Vector4::unit_x();
     for i in 0..cube_count {
         let foo: cgmath::Vector3<f32> = dir.xyz();
         world.push((
@@ -179,7 +179,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
             ),
         ));
 
-        dir = cgmath::Matrix4::from_angle_x(cgmath::Deg(360.0 / cube_count as f32)) * dir;
+        dir = cgmath::Matrix4::from_angle_z(cgmath::Deg(360.0 / cube_count as f32)) * dir;
     }
 
     // Indirect draw data

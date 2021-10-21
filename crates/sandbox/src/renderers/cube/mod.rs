@@ -6,8 +6,8 @@ use std::{borrow::Cow, sync::Arc};
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
     BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, BufferAddress,
-    BufferDescriptor, Device, RenderPipeline, ShaderModuleDescriptor, ShaderSource, Texture,
-    TextureFormat, VertexBufferLayout,
+    BufferDescriptor, ComputePipeline, Device, RenderPipeline, ShaderModuleDescriptor,
+    ShaderSource, Texture, TextureFormat, VertexBufferLayout,
 };
 
 use antigen_resources::Timing;
@@ -113,7 +113,8 @@ impl OnChangeTrait<DrawIndexedIndirect> for IndexedIndirectComponent {
 legion_debugger::register_component!(IndexedIndirectComponent);
 
 pub struct CubeRenderer {
-    bind_group: BindGroup,
+    compute_bind_group: BindGroup,
+    render_bind_group: BindGroup,
 
     vertex_buffer: Arc<Buffer>,
     index_buffer: Arc<Buffer>,
@@ -125,13 +126,55 @@ pub struct CubeRenderer {
 
     texture: Arc<Texture>,
 
-    pipelines: Lazy<(RenderPipeline, Option<RenderPipeline>), (Arc<Device>, TextureFormat)>,
+    pipelines: Lazy<
+        (ComputePipeline, RenderPipeline, Option<RenderPipeline>),
+        (Arc<Device>, TextureFormat),
+    >,
 
     indirect_count: BufferAddress,
 }
 
 impl CubeRenderer {
-    const BIND_GROUP_LAYOUT_DESCRIPTOR: BindGroupLayoutDescriptor<'static> =
+    const COMPUTE_BIND_GROUP_LAYOUT_DESC: BindGroupLayoutDescriptor<'static> =
+        BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(64),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(64),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<DrawIndexedIndirect>() as u64,
+                        ),
+                    },
+                    count: None,
+                },
+            ],
+        };
+
+    const RENDER_BIND_GROUP_LAYOUT_DESC: BindGroupLayoutDescriptor<'static> =
         BindGroupLayoutDescriptor {
             label: None,
             entries: &[
@@ -158,9 +201,14 @@ impl CubeRenderer {
             ],
         };
 
-    const SHADER_MODULE_DESCRIPTOR: ShaderModuleDescriptor<'static> = ShaderModuleDescriptor {
+    const COMPUTE_SHADER_DESC: ShaderModuleDescriptor<'static> = ShaderModuleDescriptor {
         label: None,
-        source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
+        source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("compute.wgsl"))),
+    };
+
+    const RENDER_SHADER_DESC: ShaderModuleDescriptor<'static> = ShaderModuleDescriptor {
+        label: None,
+        source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("render.wgsl"))),
     };
 
     const VERTEX_BUFFER_LAYOUTS: [VertexBufferLayout<'static>; 2] = [
@@ -237,7 +285,9 @@ impl CubeRenderer {
             label: Some("Indirect Buffer"),
             size: std::mem::size_of::<DrawIndexedIndirect>() as BufferAddress
                 * indirect_count as BufferAddress,
-            usage: wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::INDIRECT
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
 
@@ -245,19 +295,11 @@ impl CubeRenderer {
             label: Some("Instance Buffer"),
             size: std::mem::size_of::<Instance>() as BufferAddress
                 * instance_count as BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
-
-        // Create pipeline layout
-        let bind_group_layout =
-            device.create_bind_group_layout(&Self::BIND_GROUP_LAYOUT_DESCRIPTOR);
-
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&bind_group_layout],
-            push_constant_ranges: &[],
-        });
 
         // Create the texture
         let size = 256u32;
@@ -288,9 +330,49 @@ impl CubeRenderer {
         // Create texture view
         let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Create pipeline layout
+        let compute_bind_group_layout =
+            device.create_bind_group_layout(&Self::COMPUTE_BIND_GROUP_LAYOUT_DESC);
+
+        let render_bind_group_layout =
+            device.create_bind_group_layout(&Self::RENDER_BIND_GROUP_LAYOUT_DESC);
+
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&compute_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
+        let render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[&render_bind_group_layout],
+                push_constant_ranges: &[],
+            });
+
         // Create bind group
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &bind_group_layout,
+        let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &compute_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: instance_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: indirect_buffer.as_entire_binding(),
+                },
+            ],
+            label: None,
+        });
+
+        let render_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &render_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -304,21 +386,30 @@ impl CubeRenderer {
             label: None,
         });
 
-        let shader_module = device.create_shader_module(&Self::SHADER_MODULE_DESCRIPTOR);
+        let compute_shader = device.create_shader_module(&Self::COMPUTE_SHADER_DESC);
+        let render_shader = device.create_shader_module(&Self::RENDER_SHADER_DESC);
 
         let pipelines = Lazy::new(Box::new(
             move |(device, format): (Arc<Device>, TextureFormat)| {
+                let compute_pipeline =
+                    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: None,
+                        layout: Some(&compute_pipeline_layout),
+                        module: &compute_shader,
+                        entry_point: "main",
+                    });
+
                 let cube_pipeline =
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: None,
-                        layout: Some(&pipeline_layout),
+                        layout: Some(&render_pipeline_layout),
                         vertex: wgpu::VertexState {
-                            module: &shader_module,
+                            module: &render_shader,
                             entry_point: "vs_main",
                             buffers: &Self::VERTEX_BUFFER_LAYOUTS,
                         },
                         fragment: Some(wgpu::FragmentState {
-                            module: &shader_module,
+                            module: &render_shader,
                             entry_point: "fs_main",
                             targets: &[format.clone().into()],
                         }),
@@ -337,14 +428,14 @@ impl CubeRenderer {
                     Some(
                         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                             label: None,
-                            layout: Some(&pipeline_layout),
+                            layout: Some(&render_pipeline_layout),
                             vertex: wgpu::VertexState {
-                                module: &shader_module,
+                                module: &render_shader,
                                 entry_point: "vs_main",
                                 buffers: &Self::VERTEX_BUFFER_LAYOUTS,
                             },
                             fragment: Some(wgpu::FragmentState {
-                                module: &shader_module,
+                                module: &render_shader,
                                 entry_point: "fs_wire",
                                 targets: &[wgpu::ColorTargetState {
                                     format,
@@ -373,12 +464,13 @@ impl CubeRenderer {
                     None
                 };
 
-                (cube_pipeline, wire_pipeline)
+                (compute_pipeline, cube_pipeline, wire_pipeline)
             },
         ));
 
         CubeRenderer {
-            bind_group,
+            compute_bind_group,
+            render_bind_group,
             vertex_buffer,
             index_buffer,
             uniform_buffer,
@@ -534,6 +626,15 @@ impl RenderPass for CubeRenderer {
         config: &wgpu::SurfaceConfiguration,
     ) {
         let device = wgpu_manager.device();
+        let (compute_pipeline, cube_pipeline, wire_pipeline) =
+            self.pipelines.get((device, config.format));
+
+        // Compute
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
+        cpass.set_pipeline(compute_pipeline);
+        cpass.set_bind_group(0, &self.compute_bind_group, &[]);
+        cpass.dispatch(1, 1, 1);
+        drop(cpass);
 
         // Render
         let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -554,11 +655,9 @@ impl RenderPass for CubeRenderer {
             depth_stencil_attachment: None,
         });
 
-        let (cube_pipeline, wire_pipeline) = self.pipelines.get((device, config.format));
-
         rpass.push_debug_group("Prepare data for draw.");
         rpass.set_pipeline(cube_pipeline);
-        rpass.set_bind_group(0, &self.bind_group, &[]);
+        rpass.set_bind_group(0, &self.render_bind_group, &[]);
         rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
