@@ -64,13 +64,17 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
     let tetrahedron_count = 16u32;
     let cube_count = 16u32;
 
+    let vertex_count = tetrahedron_vertices.len() + cube_vertices.len();
+    let index_count = tetrahedron_indices.len() + cube_indices.len();
+    let instance_count = tetrahedron_count + cube_count;
+
     // Cube renderer
     let cube_renderer = CubeRenderer::new(
         wgpu_manager,
-        (tetrahedron_vertices.len() + cube_vertices.len()) as BufferAddress,
-        (tetrahedron_indices.len() + cube_indices.len()) as BufferAddress,
+        vertex_count as BufferAddress,
+        index_count as BufferAddress,
         2,
-        (tetrahedron_count + cube_count) as BufferAddress,
+        instance_count as BufferAddress,
     );
 
     let uniform_buffer_component =
