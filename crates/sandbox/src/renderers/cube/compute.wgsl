@@ -1,33 +1,38 @@
 [[block]]
 struct Uniforms {
-    vp_mx: mat4x4<f32>;
+    position: vec4<f32>;
+    orientation: Quaternion;
+    projection: mat4x4<f32>;
 };
 
 struct Instance {
-    mx: mat4x4<f32>;
+    position: vec4<f32>;
+    orientation: Quaternion;
+    visible: u32;
+    radius: f32;
 };
 
 [[block]]
 struct Instances {
-    instances : [[stride(64)]] array<Instance>;
+    instances : [[stride(48)]] array<Instance>;
 };
 
-struct DrawIndexedIndirect {
-    vertex_count: u32;   // The number of vertices to draw.
-    instance_count: u32; // The number of instances to draw.
-    base_index: u32;     // The base index within the index buffer.
-    vertex_offset: i32; // The value added to the vertex index before indexing into the vertex buffer.
-    base_instance: u32; // The instance ID of the first instance to draw.
+struct Indirect {
+    vertex_count: u32;
+    instance_count: u32;
+    base_index: u32;
+    vertex_offset: i32;
+    base_instance: u32;
 };
 
 [[block]]
 struct Indirect {
-    indirect : [[stride(20)]] array<DrawIndexedIndirect>;
+    indirect : [[stride(20)]] array<Indirect>;
 };
 
 [[group(0), binding(0)]] var<uniform> uniforms : Uniforms;
-[[group(0), binding(1)]] var<storage, read_write> instances : Instances;
-[[group(0), binding(2)]] var<storage, write> indirect : Indirect;
+[[group(0), binding(1)]] var<storage, read> instances : Instances;
+[[group(0), binding(2)]] var<storage, read_write> indirect : Indirect;
 
 [[stage(compute), workgroup_size(64)]]
 fn main([[builtin(global_invocation_id)]] global_invocation_id: vec3<u32>) {
@@ -37,22 +42,23 @@ fn main([[builtin(global_invocation_id)]] global_invocation_id: vec3<u32>) {
         return;
     }
 
-    // Fetch instance
+    // Extract clipping planes
+    let frustum = frustum_from_projection_matrix(uniforms.projection);
+    let frustum = frustum_normalize(frustum);
+
+    // Fetch instance data
     let instance = instances.instances[index];
 
-    // Project instance transform to NDC
-    let mx = uniforms.vp_mx * instance.mx;
+    // Transform position
+    let model_tx = instance.position.xyz;
+    let model_tx = model_tx - uniforms.position.xyz;
+    let model_tx = quat_mul(uniforms.orientation, model_tx.xyz);
 
-    // Extract position
-    let pos = mx[3].xyz / mx[3].w;
-
-    // Frustum cull
-    if (abs(pos.x) > 1.0 || abs (pos.y) > 1.0) {
-        instances.instances[index].mx = mat4x4<f32>(
-            vec4<f32>(1.0, 0.0, 0.0, 0.0),
-            vec4<f32>(0.0, 1.0, 0.0, 0.0),
-            vec4<f32>(0.0, 0.0, 1.0, 0.0),
-            vec4<f32>(0.0, 0.0, 0.0, 1.0),
-        );
+    // Cull
+    if(instance.visible == 0u || frustum_outside(frustum, model_tx, instance.radius)) {
+        indirect.indirect[index].instance_count = 0u;
+    }
+    else {
+        indirect.indirect[index].instance_count = 1u;
     }
 }

@@ -1,8 +1,9 @@
 use antigen_cgmath::components::{
     AspectRatio, EyePosition, FarPlane, FieldOfView, LookAt, NearPlane, PerspectiveProjection,
-    ProjectionMatrix, UpVector, ViewMatrix, ViewProjectionMatrix,
+    ProjectionMatrix, UpVector, ViewProjectionMatrix,
 };
 use antigen_components::{Image, ImageComponent};
+use antigen_rapier3d::rapier3d::prelude::*;
 use antigen_wgpu::{
     components::{
         BufferComponent, BufferWrite, RenderPassComponent, SurfaceComponent, TextureComponent,
@@ -11,19 +12,28 @@ use antigen_wgpu::{
     WgpuManager,
 };
 use antigen_winit::components::{RedrawMode, RedrawModeComponent, WindowComponent, WindowTitle};
+
+use cgmath::{InnerSpace, One};
 use legion::{Entity, World};
 use wgpu::BufferAddress;
 
 use crate::renderers::{
-    boids::BoidsRenderer, bunnymark::BunnymarkRenderer,
-    conservative_raster::ConservativeRasterRenderer, cube::CubeRenderer,
-    hello_triangle::TriangleRenderer, mipmap::MipmapRenderer, msaa_lines::MsaaLinesRenderer,
-    shadow::ShadowRenderer, skybox::SkyboxRenderer, texture_arrays::TextureArraysRenderer,
+    boids::BoidsRenderer,
+    bunnymark::BunnymarkRenderer,
+    conservative_raster::ConservativeRasterRenderer,
+    cube::{CubeRenderer, Uniforms, UniformsComponent},
+    hello_triangle::TriangleRenderer,
+    mipmap::MipmapRenderer,
+    msaa_lines::MsaaLinesRenderer,
+    shadow::ShadowRenderer,
+    skybox::SkyboxRenderer,
+    texture_arrays::TextureArraysRenderer,
     water::WaterRenderer,
 };
 
 type BufferWriteViewProjectionMatrix =
     BufferWrite<ViewProjectionMatrix, antigen_cgmath::cgmath::Matrix4<f32>>;
+type BufferWriteUniforms = BufferWrite<UniformsComponent, Uniforms>;
 type BufferWriteVertices =
     BufferWrite<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>;
 type BufferWriteIndices = BufferWrite<crate::renderers::cube::Indices, Vec<u16>>;
@@ -39,6 +49,7 @@ legion_debugger::register_component!(BufferWriteVertices);
 legion_debugger::register_component!(BufferWriteIndices);
 legion_debugger::register_component!(BufferWriteInstances);
 legion_debugger::register_component!(BufferWriteViewProjectionMatrix);
+legion_debugger::register_component!(BufferWriteUniforms);
 legion_debugger::register_component!(BufferWriteIndexedIndirect);
 legion_debugger::register_component!(TextureWriteImage);
 
@@ -68,12 +79,28 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
     let index_count = tetrahedron_indices.len() + cube_indices.len();
     let instance_count = tetrahedron_count + cube_count;
 
+    // Physics simulation
+    let physics_sim_entity = world.push((
+        antigen_rapier3d::Gravity(antigen_rapier3d::rapier3d::prelude::vector![
+            0.0, -9.81, 0.0
+        ]),
+        RigidBodySet::new(),
+        ColliderSet::new(),
+        IntegrationParameters::default(),
+        antigen_rapier3d::PhysicsPipelineComponent(PhysicsPipeline::new()),
+        IslandManager::new(),
+        BroadPhase::new(),
+        NarrowPhase::new(),
+        JointSet::new(),
+        CCDSolver::new(),
+    ));
+
     // Cube renderer
     let cube_renderer = CubeRenderer::new(
         wgpu_manager,
         vertex_count as BufferAddress,
         index_count as BufferAddress,
-        2,
+        instance_count as BufferAddress,
         instance_count as BufferAddress,
     );
 
@@ -103,15 +130,15 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
         EyePosition(cgmath::Point3::new(0.0, 0.0, 5.0)),
         LookAt::default(),
         UpVector::default(),
-        ViewMatrix::default(),
+        antigen_cgmath::components::Orientation::default(),
         PerspectiveProjection,
         FieldOfView::default(),
         AspectRatio::default(),
         NearPlane::default(),
-        FarPlane::default(),
+        FarPlane(200.0),
         ProjectionMatrix::default(),
-        ViewProjectionMatrix::default(),
-        BufferWriteViewProjectionMatrix::new(None, None, 0),
+        UniformsComponent::new(cgmath::Matrix4::one()),
+        BufferWriteUniforms::new(None, None, 0),
     ));
 
     let vertex_buffer_entity = world.push((vertex_buffer_component,));
@@ -149,73 +176,139 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
         ),
     ));
 
-    // Instances
+    // Indirect draw data
+    let tetrahedron_indirect = antigen_wgpu::DrawIndexedIndirect {
+        vertex_count: 12,
+        instance_count: 1,
+        base_index: 0,
+        vertex_offset: 0,
+        base_instance: 0,
+    };
+
+    let cube_indirect = antigen_wgpu::DrawIndexedIndirect {
+        vertex_count: 36,
+        instance_count: 1,
+        base_index: 12,
+        vertex_offset: 4,
+        base_instance: 0,
+    };
+
+    // Floor entity
+    let floor_entity = world.push((antigen_rapier3d::ColliderComponent {
+        physics_sim_entity,
+        parent_entity: None,
+        pending_collider: Some(
+            ColliderBuilder::cuboid(100.0, 0.1, 100.0)
+                .translation(antigen_rapier3d::rapier3d::prelude::vector![0.0, -5.0, 0.0])
+                .build(),
+        ),
+        parent_handle: None,
+        handle: None,
+    },));
+
+    // Tetrahedron entities
     let mut dir = cgmath::Vector4::unit_z();
     for i in 0..tetrahedron_count {
-        let foo: cgmath::Vector3<f32> = dir.xyz();
-        world.push((
-            crate::renderers::cube::InstanceComponent::new(
-                cgmath::Matrix4::<f32>::from_translation(foo * 3.0),
-            ),
+        let offset: cgmath::Vector3<f32> = dir.xyz();
+        let entity = world.push((
+            antigen_cgmath::components::Position3d::new(offset * 3.0),
+            antigen_cgmath::components::Orientation::default(),
+            crate::components::Visible(true),
+            antigen_rapier3d::RigidBodyComponent {
+                physics_sim_entity,
+                rigid_body_type: RigidBodyType::Dynamic,
+                handle: None,
+            },
+            antigen_rapier3d::ColliderComponent {
+                physics_sim_entity,
+                parent_entity: None,
+                pending_collider: Some(ColliderBuilder::ball(0.5).restitution(0.7).build()),
+                parent_handle: None,
+                handle: None,
+            },
+            crate::components::SphereBounds(1.0),
+            crate::renderers::cube::InstanceComponent::default(),
             BufferWriteInstances::new(
                 None,
                 Some(instance_buffer_entity),
                 std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
                     * i as wgpu::BufferAddress,
             ),
+            crate::renderers::cube::IndexedIndirectComponent::new(
+                antigen_wgpu::DrawIndexedIndirect {
+                    base_instance: i,
+                    ..tetrahedron_indirect
+                },
+            ),
+            BufferWriteIndexedIndirect::new(
+                None,
+                Some(indirect_buffer_entity),
+                std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>() as wgpu::BufferAddress
+                    * i as wgpu::BufferAddress,
+            ),
         ));
+
+        world
+            .entry(entity)
+            .unwrap()
+            .add_component(antigen_rapier3d::RigidBodyComponent {
+                physics_sim_entity,
+                rigid_body_type: RigidBodyType::Dynamic,
+                handle: None,
+            });
 
         dir = cgmath::Matrix4::from_angle_x(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
     }
 
-    let mut dir = cgmath::Vector4::unit_x();
+    // Cube entities
+    let mut dir = cgmath::Vector4::unit_z();
     for i in 0..cube_count {
-        let foo: cgmath::Vector3<f32> = dir.xyz();
+        let offset: cgmath::Vector3<f32> = dir.xyz();
         world.push((
-            crate::renderers::cube::InstanceComponent::new(
-                cgmath::Matrix4::<f32>::from_translation(foo * 3.0),
-            ),
+            antigen_cgmath::components::Position3d::new(offset * 3.0),
+            antigen_cgmath::components::Orientation::default(),
+            crate::components::SphereBounds(1.0),
+            crate::components::Visible(true),
+            antigen_rapier3d::RigidBodyComponent {
+                physics_sim_entity,
+                rigid_body_type: RigidBodyType::KinematicVelocityBased,
+                handle: None,
+            },
+            antigen_rapier3d::ColliderComponent {
+                physics_sim_entity,
+                parent_entity: None,
+                pending_collider: Some(
+                    ColliderBuilder::cuboid(0.5, 0.5, 0.5)
+                        .restitution(0.7)
+                        .build(),
+                ),
+                parent_handle: None,
+                handle: None,
+            },
+            antigen_cgmath::components::LinearVelocity3d(offset.clone().normalize() * 3.0),
+            crate::renderers::cube::InstanceComponent::default(),
             BufferWriteInstances::new(
                 None,
                 Some(instance_buffer_entity),
                 std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
                     * (i + tetrahedron_count) as wgpu::BufferAddress,
             ),
+            crate::renderers::cube::IndexedIndirectComponent::new(
+                antigen_wgpu::DrawIndexedIndirect {
+                    base_instance: i + tetrahedron_count,
+                    ..cube_indirect
+                },
+            ),
+            BufferWriteIndexedIndirect::new(
+                None,
+                Some(indirect_buffer_entity),
+                std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>() as wgpu::BufferAddress
+                    * (i + tetrahedron_count) as wgpu::BufferAddress,
+            ),
         ));
 
-        dir = cgmath::Matrix4::from_angle_z(cgmath::Deg(360.0 / cube_count as f32)) * dir;
+        dir = cgmath::Matrix4::from_angle_y(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
     }
-
-    // Indirect draw data
-    let tetrahedron_indirect = antigen_wgpu::DrawIndexedIndirect {
-        vertex_count: 12,
-        instance_count: tetrahedron_count,
-        base_index: 0,
-        vertex_offset: 0,
-        base_instance: 0,
-    };
-
-    let tetrahedron_indirect_entity = world.push((
-        crate::renderers::cube::IndexedIndirectComponent::new(tetrahedron_indirect),
-        BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
-    ));
-
-    let cube_indirect = antigen_wgpu::DrawIndexedIndirect {
-        vertex_count: 36,
-        instance_count: cube_count,
-        base_index: 12,
-        vertex_offset: 4,
-        base_instance: tetrahedron_count,
-    };
-
-    let cube_indirect_entity = world.push((
-        crate::renderers::cube::IndexedIndirectComponent::new(cube_indirect),
-        BufferWriteIndexedIndirect::new(
-            None,
-            Some(indirect_buffer_entity),
-            (std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>()) as wgpu::BufferAddress,
-        ),
-    ));
 
     // Mandelbrot texture
     let texture_entity = world.push((

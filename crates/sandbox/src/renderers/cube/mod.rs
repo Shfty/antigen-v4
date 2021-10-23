@@ -1,10 +1,10 @@
 use antigen_wgpu::{CastSlice, RenderPass, WgpuManager};
 use bytemuck::{Pod, Zeroable};
+use cgmath::{One, Zero};
 use lazy::Lazy;
 use on_change::{OnChange, OnChangeTrait};
 use std::{borrow::Cow, sync::Arc};
 use wgpu::{
-    util::{BufferInitDescriptor, DeviceExt},
     BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, BufferAddress,
     BufferDescriptor, ComputePipeline, Device, RenderPipeline, ShaderModuleDescriptor,
     ShaderSource, Texture, TextureFormat, VertexBufferLayout,
@@ -12,7 +12,7 @@ use wgpu::{
 
 use antigen_resources::Timing;
 
-use antigen_cgmath::components::{EyePosition, FieldOfView, LookAt};
+use antigen_cgmath::components::{EyePosition, FieldOfView, LookAt, ProjectionMatrix, Position3d};
 use antigen_wgpu::DrawIndexedIndirect;
 
 #[repr(C)]
@@ -48,23 +48,133 @@ legion_debugger::register_component!(Vertices);
 
 #[repr(C)]
 #[derive(Default, Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
+pub struct Uniforms {
+    _position: [f32; 4],
+    _orientation: [f32; 4],
+    _projection: [f32; 16],
+}
+
+impl CastSlice<u8> for Uniforms {
+    fn cast_slice(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct UniformsComponent(pub OnChange<Uniforms>);
+
+impl UniformsComponent {
+    pub fn new(proj_mx: cgmath::Matrix4<f32>) -> Self {
+        let pos = cgmath::Vector4::<f32>::zero();
+        let pos: [f32; 4] = *pos.as_ref();
+
+        let quat = cgmath::Quaternion::one();
+        let quat: [f32; 4] = *quat.as_ref();
+
+        let mx: [f32; 16] = *proj_mx.as_ref();
+
+        UniformsComponent(OnChange::new_dirty(Uniforms {
+            _position: pos,
+            _orientation: quat,
+            _projection: mx,
+        }))
+    }
+}
+
+impl std::ops::Deref for UniformsComponent {
+    type Target = OnChange<Uniforms>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for UniformsComponent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl OnChangeTrait<Uniforms> for UniformsComponent {
+    fn take_change(&self) -> Option<&Uniforms> {
+        self.0.take_change()
+    }
+}
+
+legion_debugger::register_component!(UniformsComponent);
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct Instance {
-    _trx: [f32; 16],
+    _position: [f32; 4],
+    _orientation: [f32; 4],
+    _visible: u32,
+    _radius: f32,
+    _pad: [u32; 2],
+}
+
+impl Default for Instance {
+    fn default() -> Self {
+        Instance {
+            _position: Default::default(),
+            _orientation: [0.0, 0.0, 0.0, 1.0],
+            _visible: 1,
+            _radius: 0.0,
+            _pad: Default::default(),
+        }
+    }
 }
 
 impl CastSlice<u8> for Instance {
     fn cast_slice(&self) -> &[u8] {
-        bytemuck::cast_slice(&self._trx)
+        bytemuck::bytes_of(self)
     }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct InstanceComponent(pub OnChange<Instance>);
 
+impl Default for InstanceComponent {
+    fn default() -> Self {
+        InstanceComponent(OnChange::new_dirty(Default::default()))
+    }
+}
+
 impl InstanceComponent {
-    pub fn new(mx: cgmath::Matrix4<f32>) -> Self {
-        let mx: [f32; 16] = *mx.as_ref();
-        InstanceComponent(OnChange::new_dirty(Instance { _trx: mx }))
+    pub fn new(
+        position: cgmath::Vector3<f32>,
+        orientation: cgmath::Quaternion<f32>,
+        radius: f32,
+        visible: bool,
+    ) -> Self {
+        let pos: [f32; 3] = *position.as_ref();
+        let pos = [pos[0], pos[1], pos[2], 0.0];
+
+        let quat: [f32; 4] = *orientation.as_ref();
+
+        let visible: u32 = if visible { 1 } else { 0 };
+
+        InstanceComponent(OnChange::new_dirty(Instance {
+            _position: pos,
+            _orientation: quat,
+            _visible: visible,
+            _radius: radius,
+            _pad: Default::default(),
+        }))
+    }
+}
+
+impl std::ops::Deref for InstanceComponent {
+    type Target = OnChange<Instance>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for InstanceComponent {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
 }
 
@@ -145,7 +255,9 @@ impl CubeRenderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(64),
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Uniforms>() as u64
+                        ),
                     },
                     count: None,
                 },
@@ -153,9 +265,11 @@ impl CubeRenderer {
                     binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(64),
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Instance>() as u64
+                        ),
                     },
                     count: None,
                 },
@@ -165,9 +279,9 @@ impl CubeRenderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Storage { read_only: false },
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<DrawIndexedIndirect>() as u64,
-                        ),
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<
+                            DrawIndexedIndirect,
+                        >() as u64),
                     },
                     count: None,
                 },
@@ -184,7 +298,9 @@ impl CubeRenderer {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(64),
+                        min_binding_size: wgpu::BufferSize::new(
+                            std::mem::size_of::<Uniforms>() as u64
+                        ),
                     },
                     count: None,
                 },
@@ -200,16 +316,6 @@ impl CubeRenderer {
                 },
             ],
         };
-
-    const COMPUTE_SHADER_DESC: ShaderModuleDescriptor<'static> = ShaderModuleDescriptor {
-        label: None,
-        source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("compute.wgsl"))),
-    };
-
-    const RENDER_SHADER_DESC: ShaderModuleDescriptor<'static> = ShaderModuleDescriptor {
-        label: None,
-        source: ShaderSource::Wgsl(Cow::Borrowed(include_str!("render.wgsl"))),
-    };
 
     const VERTEX_BUFFER_LAYOUTS: [VertexBufferLayout<'static>; 2] = [
         VertexBufferLayout {
@@ -241,16 +347,6 @@ impl CubeRenderer {
                     format: wgpu::VertexFormat::Float32x4,
                     offset: 4 * 4,
                     shader_location: 3,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 4 * 4 * 2,
-                    shader_location: 4,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 4 * 4 * 3,
-                    shader_location: 5,
                 },
             ],
         },
@@ -322,7 +418,7 @@ impl CubeRenderer {
         // Create uniform buffer
         let uniform_buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<cgmath::Matrix4<f32>>() as BufferAddress,
+            size: std::mem::size_of::<Uniforms>() as BufferAddress,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
@@ -386,8 +482,28 @@ impl CubeRenderer {
             label: None,
         });
 
-        let compute_shader = device.create_shader_module(&Self::COMPUTE_SHADER_DESC);
-        let render_shader = device.create_shader_module(&Self::RENDER_SHADER_DESC);
+        let compute_shader_desc = ShaderModuleDescriptor {
+            label: None,
+            source: ShaderSource::Wgsl(Cow::Owned(format!(
+                "{}\n{}\n{}\n{}",
+                include_str!("quaternion.wgsl"),
+                include_str!("plane.wgsl"),
+                include_str!("frustum.wgsl"),
+                include_str!("compute.wgsl")
+            ))),
+        };
+
+        let render_shader_desc = ShaderModuleDescriptor {
+            label: None,
+            source: ShaderSource::Wgsl(Cow::Owned(format!(
+                "{}\n{}",
+                include_str!("quaternion.wgsl"),
+                include_str!("render.wgsl")
+            ))),
+        };
+
+        let compute_shader = device.create_shader_module(&compute_shader_desc);
+        let render_shader = device.create_shader_module(&render_shader_desc);
 
         let pipelines = Lazy::new(Box::new(
             move |(device, format): (Arc<Device>, TextureFormat)| {
@@ -596,25 +712,6 @@ impl CubeRenderer {
             })
             .collect()
     }
-
-    fn create_instances() -> Vec<Instance> {
-        let mut instances = vec![];
-
-        let count = 1;
-        for x in -count..=count {
-            for y in -count..=count {
-                for z in -count..=count {
-                    let mx = cgmath::Matrix4::<f32>::from_translation(cgmath::Vector3::new(
-                        x as f32, y as f32, z as f32,
-                    ));
-                    let mx: [f32; 16] = *mx.as_ref();
-                    instances.push(Instance { _trx: mx })
-                }
-            }
-        }
-
-        instances
-    }
 }
 
 impl RenderPass for CubeRenderer {
@@ -692,12 +789,62 @@ pub fn update_look(
     #[resource] timing: &Timing,
 ) {
     let total = timing.total_time().as_secs_f32();
-    *eye_position = cgmath::Point3::new(total.sin() * 1.5, total.cos() * -5.0, 5.0);
+    let pos = cgmath::Point3::new(total.sin() * 5.0, 5.0, total.cos() * 1.5);
+    *eye_position = pos;
 }
 
 #[legion::system(par_for_each)]
-pub fn update_projection(perspective_projection: &mut FieldOfView, #[resource] timing: &Timing) {
+pub fn update_projection(field_of_view: &mut FieldOfView, #[resource] timing: &Timing) {
     let total = timing.total_time().as_secs_f32();
-    let fov = ((total * 0.2).sin() * 90.0) + 90.0;
-    perspective_projection.set_fov(cgmath::Deg(fov));
+    let fov = 90.0;//((total * 0.2).sin() * 90.0) + 90.0;
+    field_of_view.set_fov(cgmath::Deg(fov));
+}
+
+#[legion::system(par_for_each)]
+pub fn update_instances(
+    position: &Position3d,
+    orientation: &antigen_cgmath::components::Orientation,
+    visible: &crate::components::Visible,
+    sphere_bounds: &crate::components::SphereBounds,
+    instance: &mut InstanceComponent,
+) {
+    let inst = *instance.get();
+
+    let pos: [f32; 3] = *(*position).as_ref();
+    let pos = [pos[0], pos[1], pos[2], 0.0];
+
+    let quat: [f32; 4] = *(*orientation).as_ref();
+
+    let visible = **visible;
+
+    let radius = **sphere_bounds;
+
+    instance.set(Instance {
+        _position: pos,
+        _orientation: quat,
+        _visible: visible as u32,
+        _radius: radius,
+        ..inst
+    })
+}
+
+#[legion::system(par_for_each)]
+pub fn update_uniforms(
+    projection_matrix: &ProjectionMatrix,
+    eye_position: &EyePosition,
+    orientation: &antigen_cgmath::components::Orientation,
+    uniforms: &mut UniformsComponent,
+) {
+    let mx: [f32; 16] = *(*projection_matrix).as_ref();
+
+    let pos: [f32; 3] = *(*eye_position).as_ref();
+    let pos = [pos[0], pos[1], pos[2], 0.0];
+
+    let quat: [f32; 4] = *(orientation).as_ref();
+
+    uniforms.set(Uniforms {
+        _position: pos,
+        _orientation: quat,
+        _projection: mx,
+    })
 }

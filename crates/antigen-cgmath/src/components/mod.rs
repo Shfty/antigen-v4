@@ -11,6 +11,9 @@ mod near_plane;
 mod far_plane;
 mod field_of_view;
 mod view_projection_matrix;
+mod position;
+mod orientation;
+mod velocity;
 
 pub use projection_matrix::*;
 pub use view_matrix::*;
@@ -25,3 +28,6 @@ pub use near_plane::*;
 pub use far_plane::*;
 pub use field_of_view::*;
 pub use view_projection_matrix::*;
+pub use position::*;
+pub use orientation::*;
+pub use velocity::*;

@@ -1,5 +1,5 @@
-mod position;
-mod velocity;
+mod sphere_bounds;
+mod visible;
 
-pub use position::*;
-pub use velocity::*;
+pub use sphere_bounds::*;
+pub use visible::*;

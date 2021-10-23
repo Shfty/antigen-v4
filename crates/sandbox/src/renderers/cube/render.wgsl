@@ -1,13 +1,18 @@
+[[block]]
+struct Locals {
+    position: vec4<f32>;
+    orientation: Quaternion;
+    projection: mat4x4<f32>;
+};
+
 struct VertexInput {
     [[location(0)]] position: vec4<f32>;
     [[location(1)]] tex_coord: vec2<f32>;
 };
 
 struct InstanceInput {
-    [[location(2)]] mx_0: vec4<f32>;
-    [[location(3)]] mx_1: vec4<f32>;
-    [[location(4)]] mx_2: vec4<f32>;
-    [[location(5)]] mx_3: vec4<f32>;
+    [[location(2)]] position: vec4<f32>;
+    [[location(3)]] orientation: vec4<f32>;
 };
 
 struct VertexOutput {
@@ -15,33 +20,31 @@ struct VertexOutput {
     [[builtin(position)]] position: vec4<f32>;
 };
 
-[[block]]
-struct Locals {
-    transform: mat4x4<f32>;
-};
-
 [[group(0), binding(0)]]
 var<uniform> r_locals: Locals;
+
+[[group(0), binding(1)]]
+var r_color: texture_2d<u32>;
 
 [[stage(vertex)]]
 fn vs_main(
     model: VertexInput,
     instance: InstanceInput,
 ) -> VertexOutput {
-    var model_matrix = mat4x4<f32>(
-        instance.mx_0,
-        instance.mx_1,
-        instance.mx_2,
-        instance.mx_3,
-    );
+    let instance_orientation = quat_from_vec4(instance.orientation);
+
+    let model_tx = model.position;
+    let model_tx = quat_mul(instance_orientation, model_tx.xyz);
+    let model_tx = model_tx.xyz + instance.position.xyz;
+
+    let model_tx = model_tx.xyz - r_locals.position.xyz;
+    let model_tx = quat_mul(r_locals.orientation, model_tx.xyz);
+
     var out: VertexOutput;
+    out.position = r_locals.projection * vec4<f32>(model_tx, model.position.w);
     out.tex_coord = model.tex_coord;
-    out.position = r_locals.transform * model_matrix * model.position;
     return out;
 }
-
-[[group(0), binding(1)]]
-var r_color: texture_2d<u32>;
 
 [[stage(fragment)]]
 fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {

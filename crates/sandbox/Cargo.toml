@@ -41,6 +41,7 @@ antigen-wgpu = { path = "../antigen-wgpu" }
 antigen-components = { path = "../antigen-components" }
 antigen-resources = { path = "../antigen-resources" }
 antigen-cgmath = { path = "../antigen-cgmath" }
+antigen-rapier3d = { path = "../antigen-rapier3d" }
 remote-channel = { path = "../remote-channel" }
 lazy = { path = "../lazy" }
 on-change = { path = "../on-change" }

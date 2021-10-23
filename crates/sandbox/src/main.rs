@@ -70,32 +70,6 @@ fn build_world(wgpu_manager: &WgpuManager) -> World {
     //assemblages::skybox_renderer(&mut world, wgpu_manager);
     //assemblages::water_renderer(&mut world, wgpu_manager);
 
-    // Test entity
-    let entity: Entity = world.push((Position { x: 0.0, y: 0.0 }, Velocity { dx: 0.5, dy: 0.0 }));
-
-    let _entities: &[Entity] = world.extend(vec![
-        (Position { x: 0.0, y: 0.0 }, Velocity { dx: 1.0, dy: 3.0 }),
-        (Position { x: 1.0, y: 1.0 }, Velocity { dx: 2.0, dy: 2.0 }),
-        (Position { x: 2.0, y: 2.0 }, Velocity { dx: 3.0, dy: 1.0 }),
-    ]);
-
-    if let Some(mut entry) = world.entry(entity) {
-        // add an extra component
-        entry.add_component(12f32);
-
-        // access the entity's components, returns `None` if the entity does not have the component
-        assert_eq!(entry.get_component::<f32>().unwrap(), &12f32);
-    }
-
-    // entries return `None` if the entity does not exist
-    if let Some(mut entry) = world.entry(entity) {
-        // add an extra component
-        entry.add_component(12f32);
-
-        // access the entity's components, returns `None` if the entity does not have the component
-        assert_eq!(entry.get_component::<f32>().unwrap(), &12f32);
-    }
-
     world
 }
 
@@ -203,14 +177,8 @@ fn main() {
     // Prepare main loop
     let resize_schedule = Schedule::builder()
         .add_system(antigen_wgpu::systems::aspect_ratio_system())
-        .add_system(antigen_cgmath::systems::look_at_system())
+        .add_system(antigen_cgmath::systems::look_at_quat_system())
         .add_system(antigen_cgmath::systems::perspective_projection_system())
-        .flush()
-        .add_system(antigen_cgmath::systems::view_projection_matrix_system())
-        .add_system(antigen_wgpu::systems::buffer_write_system::<
-            ViewProjectionMatrix,
-            antigen_cgmath::cgmath::Matrix4<f32>,
-        >())
         .build();
 
     // Run main loop

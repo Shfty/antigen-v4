@@ -5,7 +5,7 @@ pub struct UpVector(pub Vector3<f32>);
 
 impl Default for UpVector {
     fn default() -> Self {
-        UpVector(Vector3::unit_z())
+        UpVector(Vector3::unit_y())
     }
 }
 
