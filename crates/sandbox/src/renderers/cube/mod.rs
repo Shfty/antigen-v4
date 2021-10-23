@@ -3,7 +3,7 @@ use bytemuck::{Pod, Zeroable};
 use cgmath::{One, Zero};
 use lazy::Lazy;
 use on_change::{OnChange, OnChangeTrait};
-use std::{borrow::Cow, sync::Arc};
+use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
 use wgpu::{
     BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, BufferAddress,
     BufferDescriptor, ComputePipeline, Device, RenderPipeline, ShaderModuleDescriptor,
@@ -12,7 +12,7 @@ use wgpu::{
 
 use antigen_resources::Timing;
 
-use antigen_cgmath::components::{EyePosition, FieldOfView, LookAt, Position3d, ProjectionMatrix};
+use antigen_cgmath::components::{EyePosition, LookAt, Position3d, ProjectionMatrix};
 use antigen_wgpu::DrawIndexedIndirect;
 
 #[repr(C)]
@@ -20,12 +20,14 @@ use antigen_wgpu::DrawIndexedIndirect;
 pub struct Vertex {
     _pos: [f32; 4],
     _tex_coord: [f32; 2],
+    _texture: i32,
 }
 
 fn vertex(pos: [f32; 3], tc: [f32; 2]) -> Vertex {
     Vertex {
         _pos: [pos[0], pos[1], pos[2], 1.0],
         _tex_coord: [tc[0], tc[1]],
+        _texture: 0,
     }
 }
 
@@ -48,15 +50,7 @@ legion_debugger::register_component!(Vertices);
 
 #[repr(C)]
 #[derive(
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    PartialOrd,
-    Pod,
-    Zeroable,
-    serde::Serialize,
-    serde::Deserialize,
+    Default, Clone, Copy, PartialEq, PartialOrd, Pod, Zeroable, serde::Serialize, serde::Deserialize,
 )]
 pub struct Uniforms {
     _position: [f32; 4],
@@ -120,9 +114,10 @@ legion_debugger::register_component!(UniformsComponent);
 pub struct Instance {
     _position: [f32; 4],
     _orientation: [f32; 4],
+    _texture: i32,
     _visible: u32,
     _radius: f32,
-    _pad: [u32; 2],
+    _pad: [u32; 1],
 }
 
 impl Default for Instance {
@@ -131,6 +126,7 @@ impl Default for Instance {
             _position: Default::default(),
             _orientation: [0.0, 0.0, 0.0, 1.0],
             _visible: 1,
+            _texture: 0,
             _radius: 0.0,
             _pad: Default::default(),
         }
@@ -157,6 +153,7 @@ impl InstanceComponent {
         position: cgmath::Vector3<f32>,
         orientation: cgmath::Quaternion<f32>,
         radius: f32,
+        texture: i32,
         visible: bool,
     ) -> Self {
         let pos: [f32; 3] = *position.as_ref();
@@ -169,6 +166,7 @@ impl InstanceComponent {
         InstanceComponent(OnChange::new_dirty(Instance {
             _position: pos,
             _orientation: quat,
+            _texture: texture,
             _visible: visible,
             _radius: radius,
             _pad: Default::default(),
@@ -300,35 +298,6 @@ impl CubeRenderer {
             ],
         };
 
-    const RENDER_BIND_GROUP_LAYOUT_DESC: BindGroupLayoutDescriptor<'static> =
-        BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<Uniforms>() as u64
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        multisampled: false,
-                        sample_type: wgpu::TextureSampleType::Uint,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        };
-
     const VERTEX_BUFFER_LAYOUTS: [VertexBufferLayout<'static>; 2] = [
         VertexBufferLayout {
             array_stride: std::mem::size_of::<Vertex>() as BufferAddress,
@@ -344,6 +313,11 @@ impl CubeRenderer {
                     offset: 4 * 4,
                     shader_location: 1,
                 },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Sint32,
+                    offset: 4 * 6,
+                    shader_location: 2,
+                }
             ],
         },
         VertexBufferLayout {
@@ -353,13 +327,18 @@ impl CubeRenderer {
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
                     offset: 0,
-                    shader_location: 2,
+                    shader_location: 3,
                 },
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
                     offset: 4 * 4,
-                    shader_location: 3,
+                    shader_location: 4,
                 },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Sint32,
+                    offset: 4 * 8,
+                    shader_location: 5,
+                }
             ],
         },
     ];
@@ -408,6 +387,13 @@ impl CubeRenderer {
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
+        // Create uniform buffer
+        let uniform_buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Uniform Buffer"),
+            size: std::mem::size_of::<Uniforms>() as BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
 
         // Create the texture
         let size = 256u32;
@@ -427,23 +413,50 @@ impl CubeRenderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         }));
 
-        // Create uniform buffer
-        let uniform_buffer = Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Uniform Buffer"),
-            size: std::mem::size_of::<Uniforms>() as BufferAddress,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }));
-
         // Create texture view
-        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let texture_view = texture.create_view(&wgpu::TextureViewDescriptor {
+            label: None,
+            format: None,
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            aspect: wgpu::TextureAspect::All,
+            base_mip_level: 0,
+            mip_level_count: None,
+            base_array_layer: 0,
+            array_layer_count: None,
+        });
 
         // Create pipeline layout
         let compute_bind_group_layout =
             device.create_bind_group_layout(&Self::COMPUTE_BIND_GROUP_LAYOUT_DESC);
 
         let render_bind_group_layout =
-            device.create_bind_group_layout(&Self::RENDER_BIND_GROUP_LAYOUT_DESC);
+            device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[
+                    BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: wgpu::BufferSize::new(
+                                std::mem::size_of::<Uniforms>() as u64,
+                            ),
+                        },
+                        count: None,
+                    },
+                    BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            sample_type: wgpu::TextureSampleType::Uint,
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                        },
+                        count: Some(NonZeroU32::new(1).unwrap()),
+                    },
+                ],
+            });
 
         let compute_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -488,7 +501,7 @@ impl CubeRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&texture_view),
+                    resource: wgpu::BindingResource::TextureViewArray(&[&texture_view]),
                 },
             ],
             label: None,
@@ -766,10 +779,10 @@ impl RenderPass for CubeRenderer {
 
         rpass.push_debug_group("Prepare data for draw.");
         rpass.set_pipeline(cube_pipeline);
-        rpass.set_bind_group(0, &self.render_bind_group, &[]);
-        rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        rpass.set_bind_group(0, &self.render_bind_group, &[]);
         rpass.pop_debug_group();
 
         rpass.insert_debug_marker("Draw!");
