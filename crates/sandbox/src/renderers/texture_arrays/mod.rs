@@ -69,25 +69,67 @@ pub struct TextureArraysRenderer {
 }
 
 impl TextureArraysRenderer {
+    const VERTEX_SHADER_DESC: wgpu::ShaderModuleDescriptorSpirV<'static> =
+        wgpu::ShaderModuleDescriptorSpirV {
+            label: None,
+            source: std::borrow::Cow::Borrowed(inline_spirv::include_spirv!(
+                "src/renderers/texture_arrays/shader.vert",
+                glsl,
+                vert
+            )),
+        };
+
+    const FRAGMENT_SHADER_DESC_UNSIZED_NON_UNIFORM: wgpu::ShaderModuleDescriptorSpirV<'static> =
+        wgpu::ShaderModuleDescriptorSpirV {
+            label: None,
+            source: std::borrow::Cow::Borrowed(inline_spirv::include_spirv!(
+                "src/renderers/texture_arrays/unsized-non-uniform.frag",
+                glsl,
+                frag
+            )),
+        };
+
+    const FRAGMENT_SHADER_DESC_NON_UNIFORM: wgpu::ShaderModuleDescriptorSpirV<'static> =
+        wgpu::ShaderModuleDescriptorSpirV {
+            label: None,
+            source: std::borrow::Cow::Borrowed(inline_spirv::include_spirv!(
+                "src/renderers/texture_arrays/non-uniform.frag",
+                glsl,
+                frag
+            )),
+        };
+
+    const FRAGMENT_SHADER_DESC_UNIFORM: wgpu::ShaderModuleDescriptorSpirV<'static> =
+        wgpu::ShaderModuleDescriptorSpirV {
+            label: None,
+            source: std::borrow::Cow::Borrowed(inline_spirv::include_spirv!(
+                "src/renderers/texture_arrays/uniform.frag",
+                glsl,
+                frag
+            )),
+        };
+
     pub fn new(wgpu_manager: &WgpuManager) -> Self {
         let device = wgpu_manager.device();
         let queue = wgpu_manager.queue();
 
         let mut uniform_workaround = false;
-        let vs_module = device.create_shader_module(&wgpu::include_spirv!("shader.vert.spv"));
+
+        let vs_module = unsafe { device.create_shader_module_spirv(&Self::VERTEX_SHADER_DESC) };
+
         let fs_source = match device.features() {
             f if f.contains(wgpu::Features::UNSIZED_BINDING_ARRAY) => {
-                wgpu::include_spirv_raw!("unsized-non-uniform.frag.spv")
+                Self::FRAGMENT_SHADER_DESC_UNSIZED_NON_UNIFORM
             }
             f if f.contains(
                 wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
             ) =>
             {
-                wgpu::include_spirv_raw!("non-uniform.frag.spv")
+                Self::FRAGMENT_SHADER_DESC_NON_UNIFORM
             }
             f if f.contains(wgpu::Features::TEXTURE_BINDING_ARRAY) => {
                 uniform_workaround = true;
-                wgpu::include_spirv_raw!("uniform.frag.spv")
+                Self::FRAGMENT_SHADER_DESC_UNIFORM
             }
             _ => unreachable!(),
         };
