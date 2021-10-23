@@ -125,7 +125,9 @@ pub fn texture_write<
                 let data_layout = *texture_write.data_layout();
                 let extent = *texture_write.extent();
 
-                queue.write_texture(texture.as_image_copy(), data, data_layout, extent);
+                let mut copy_tex = texture.as_image_copy();
+                copy_tex.origin.z = texture_write.layer();
+                queue.write_texture(copy_tex, data, data_layout, extent);
             }
         }
     }

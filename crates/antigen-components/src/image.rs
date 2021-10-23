@@ -29,6 +29,16 @@ impl Image {
         self.height
     }
 
+    pub fn inverse(&self) -> Image {
+        let data = self.data.iter().copied().map(|v| 255 - v).collect::<Vec<_>>();
+
+        Image {
+            data,
+            width: self.width,
+            height: self.height,
+        }
+    }
+
     pub fn mandelbrot_r8(size: u32) -> Self {
         let data = (0..size * size)
             .map(|id| {
@@ -78,4 +88,3 @@ impl Image {
         }
     }
 }
-

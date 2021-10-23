@@ -13,6 +13,7 @@ pub struct TextureWrite<T: OnChangeTrait<D>, D: CastSlice<u8>> {
     to: Option<Entity>,
     data_layout: ImageDataLayout,
     extent: Extent3d,
+    layer: u32,
     _phantom: PhantomData<(T, D)>,
 }
 
@@ -43,12 +44,14 @@ impl<T: OnChangeTrait<D>, D: CastSlice<u8>> TextureWrite<T, D> {
         to: Option<Entity>,
         data_layout: ImageDataLayout,
         extent: Extent3d,
+        layer: u32,
     ) -> Self {
         TextureWrite {
             from,
             to,
             data_layout,
             extent,
+            layer,
             _phantom: Default::default(),
         }
     }
@@ -67,5 +70,9 @@ impl<T: OnChangeTrait<D>, D: CastSlice<u8>> TextureWrite<T, D> {
 
     pub fn extent(&self) -> &Extent3d {
         &self.extent
+    }
+
+    pub fn layer(&self) -> u32 {
+        self.layer
     }
 }

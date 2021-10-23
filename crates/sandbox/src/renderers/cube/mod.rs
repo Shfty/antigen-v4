@@ -23,11 +23,11 @@ pub struct Vertex {
     _texture: i32,
 }
 
-fn vertex(pos: [f32; 3], tc: [f32; 2]) -> Vertex {
+fn vertex(pos: [f32; 3], tc: [f32; 2], ti: i32) -> Vertex {
     Vertex {
         _pos: [pos[0], pos[1], pos[2], 1.0],
         _tex_coord: [tc[0], tc[1]],
-        _texture: 0,
+        _texture: ti,
     }
 }
 
@@ -151,7 +151,6 @@ impl InstanceComponent {
         position: cgmath::Vector3<f32>,
         orientation: cgmath::Quaternion<f32>,
         radius: f32,
-        texture: i32,
         visible: bool,
     ) -> Self {
         let pos: [f32; 3] = *position.as_ref();
@@ -314,7 +313,7 @@ impl CubeRenderer {
                     format: wgpu::VertexFormat::Sint32,
                     offset: 4 * 6,
                     shader_location: 2,
-                }
+                },
             ],
         },
         VertexBufferLayout {
@@ -341,6 +340,7 @@ impl CubeRenderer {
         index_count: BufferAddress,
         indirect_count: BufferAddress,
         instance_count: BufferAddress,
+        texture_count: u32,
     ) -> Self {
         // Fetch resources
         let device = wgpu_manager.device();
@@ -392,7 +392,7 @@ impl CubeRenderer {
         let texture_extent = wgpu::Extent3d {
             width: size,
             height: size,
-            depth_or_array_layers: 1,
+            depth_or_array_layers: texture_count,
         };
 
         let texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
@@ -445,7 +445,7 @@ impl CubeRenderer {
                             sample_type: wgpu::TextureSampleType::Uint,
                             view_dimension: wgpu::TextureViewDimension::D2Array,
                         },
-                        count: Some(NonZeroU32::new(1).unwrap()),
+                        count: None,
                     },
                 ],
             });
@@ -493,7 +493,7 @@ impl CubeRenderer {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureViewArray(&[&texture_view]),
+                    resource: wgpu::BindingResource::TextureView(&texture_view),
                 },
             ],
             label: None,
@@ -643,35 +643,35 @@ impl CubeRenderer {
         #[rustfmt::skip]
         let vertex_data = [
             // top (0, 0, 1)
-            vertex([-0.5, -0.5, 0.5], [0.0, 0.0]),
-            vertex([0.5, -0.5, 0.5], [1.0, 0.0]),
-            vertex([0.5, 0.5, 0.5], [1.0, 1.0]),
-            vertex([-0.5, 0.5, 0.5], [0.0, 1.0]),
+            vertex([-0.5, -0.5, 0.5], [0.0, 0.0], 0),
+            vertex([0.5, -0.5, 0.5], [1.0, 0.0], 0),
+            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 0),
+            vertex([-0.5, 0.5, 0.5], [0.0, 1.0], 0),
             // bottom (0, 0, -0.5)
-            vertex([-0.5, 0.5, -0.5], [1.0, 0.0]),
-            vertex([0.5, 0.5, -0.5], [0.0, 0.0]),
-            vertex([0.5, -0.5, -0.5], [0.0, 1.0]),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0]),
+            vertex([-0.5, 0.5, -0.5], [1.0, 0.0], 1),
+            vertex([0.5, 0.5, -0.5], [0.0, 0.0], 1),
+            vertex([0.5, -0.5, -0.5], [0.0, 1.0], 1),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 1),
             // right (0.5, 0, 0)
-            vertex([0.5, -0.5, -0.5], [0.0, 0.0]),
-            vertex([0.5, 0.5, -0.5], [1.0, 0.0]),
-            vertex([0.5, 0.5, 0.5], [1.0, 1.0]),
-            vertex([0.5, -0.5, 0.5], [0.0, 1.0]),
+            vertex([0.5, -0.5, -0.5], [0.0, 0.0], 0),
+            vertex([0.5, 0.5, -0.5], [1.0, 0.0], 1),
+            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 1),
+            vertex([0.5, -0.5, 0.5], [0.0, 1.0], 1),
             // left (-0.5, 0, 0)
-            vertex([-0.5, -0.5, 0.5], [1.0, 0.0]),
-            vertex([-0.5, 0.5, 0.5], [0.0, 0.0]),
-            vertex([-0.5, 0.5, -0.5], [0.0, 1.0]),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0]),
+            vertex([-0.5, -0.5, 0.5], [1.0, 0.0], 0),
+            vertex([-0.5, 0.5, 0.5], [0.0, 0.0], 0),
+            vertex([-0.5, 0.5, -0.5], [0.0, 1.0], 1),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 1),
             // front (0, 0.5, 0)
-            vertex([0.5, 0.5, -0.5], [1.0, 0.0]),
-            vertex([-0.5, 0.5, -0.5], [0.0, 0.0]),
-            vertex([-0.5, 0.5, 0.5], [0.0, 1.0]),
-            vertex([0.5, 0.5, 0.5], [1.0, 1.0]),
+            vertex([0.5, 0.5, -0.5], [1.0, 0.0], 0),
+            vertex([-0.5, 0.5, -0.5], [0.0, 0.0], 0),
+            vertex([-0.5, 0.5, 0.5], [0.0, 1.0], 0),
+            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 1),
             // back (0, -0.5, 0)
-            vertex([0.5, -0.5, 0.5], [0.0, 0.0]),
-            vertex([-0.5, -0.5, 0.5], [1.0, 0.0]),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0]),
-            vertex([0.5, -0.5, -0.5], [0.0, 1.0]),
+            vertex([0.5, -0.5, 0.5], [0.0, 0.0], 1),
+            vertex([-0.5, -0.5, 0.5], [1.0, 0.0], 0),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 1),
+            vertex([0.5, -0.5, -0.5], [0.0, 1.0], 0),
         ];
 
         #[rustfmt::skip]
@@ -695,10 +695,10 @@ impl CubeRenderer {
 
         #[rustfmt::skip]
         let vertex_data = [
-            vertex([0.0, 0.0, 1.0], [0.0, 0.0]),
-            vertex([-c, d, -a], [1.0, 0.0]),
-            vertex([-c, -d, -a], [1.0, 1.0]),
-            vertex([b, 0.0, a], [0.0, 1.0]),
+            vertex([0.0, 0.0, 1.0], [0.0, 0.0], 1),
+            vertex([-c, d, -a], [1.0, 0.0], 1),
+            vertex([-c, -d, -a], [1.0, 1.0], 1),
+            vertex([b, 0.0, a], [0.0, 1.0], 1),
         ];
 
         #[rustfmt::skip]

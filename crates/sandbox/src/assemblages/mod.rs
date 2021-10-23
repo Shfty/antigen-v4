@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use antigen_cgmath::components::{
     AspectRatio, EyePosition, FarPlane, FieldOfView, LookAt, NearPlane, PerspectiveProjection,
     ProjectionMatrix, UpVector, ViewProjectionMatrix,
@@ -68,7 +70,7 @@ pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) ->
     ))
 }
 
-pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, Entity) {
+pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     let (tetrahedron_vertices, tetrahedron_indices) = CubeRenderer::tetrahedron_vertices();
     let (cube_vertices, cube_indices) = CubeRenderer::cube_vertices();
 
@@ -102,6 +104,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
         index_count as BufferAddress,
         instance_count as BufferAddress,
         instance_count as BufferAddress,
+        2,
     );
 
     let uniform_buffer_component =
@@ -113,7 +116,49 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
         BufferComponent::from(cube_renderer.take_instance_buffer_handle());
     let indirect_buffer_component =
         BufferComponent::from(cube_renderer.take_indirect_buffer_handle());
-    let texture_component = TextureComponent::from(cube_renderer.take_texture_handle());
+
+    // Mandelbrot texture
+    let texture_entity = world.push((
+        TextureComponent::from(cube_renderer.take_texture_handle()),
+    ));
+
+    let mandelbrot_texture_entity = world.push((
+        ImageComponent::from(Image::mandelbrot_r8(256)),
+        TextureWriteImage::new(
+            None,
+            Some(texture_entity),
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(NonZeroU32::new(256).unwrap()),
+                rows_per_image: Some(NonZeroU32::new(256).unwrap()),
+            },
+            wgpu::Extent3d {
+                width: 256,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+            0,
+        ),
+    ));
+
+    let inverse_mandelbrot_texture_entity = world.push((
+        ImageComponent::from(Image::mandelbrot_r8(256).inverse()),
+        TextureWriteImage::new(
+            None,
+            Some(texture_entity),
+            wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: Some(NonZeroU32::new(256).unwrap()),
+                rows_per_image: Some(NonZeroU32::new(256).unwrap()),
+            },
+            wgpu::Extent3d {
+                width: 256,
+                height: 256,
+                depth_or_array_layers: 1,
+            },
+            1,
+        ),
+    ));
 
     let cube_pass_id = wgpu_manager.add_render_pass(Box::new(cube_renderer));
 
@@ -297,28 +342,6 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
 
         dir = cgmath::Matrix4::from_angle_y(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
     }
-
-    // Mandelbrot texture
-    let texture_entity = world.push((
-        ImageComponent::from(Image::mandelbrot_r8(256)),
-        TextureWriteImage::new(
-            None,
-            None,
-            wgpu::ImageDataLayout {
-                offset: 0,
-                bytes_per_row: Some(std::num::NonZeroU32::new(256).unwrap()),
-                rows_per_image: None,
-            },
-            wgpu::Extent3d {
-                width: 256,
-                height: 256,
-                depth_or_array_layers: 1,
-            },
-        ),
-        texture_component,
-    ));
-
-    (cube_renderer_entity, texture_entity)
 }
 
 pub fn msaa_lines_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {
