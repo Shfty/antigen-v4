@@ -213,10 +213,9 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
         let entity = world.push((
             antigen_cgmath::components::Position3d::new(offset * 3.0),
             antigen_cgmath::components::Orientation::default(),
-            crate::components::Visible(true),
             antigen_rapier3d::RigidBodyComponent {
                 physics_sim_entity,
-                rigid_body_type: RigidBodyType::Dynamic,
+                pending_rigid_body: Some(RigidBodyBuilder::new_dynamic().build()),
                 handle: None,
             },
             antigen_rapier3d::ColliderComponent {
@@ -248,15 +247,6 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
             ),
         ));
 
-        world
-            .entry(entity)
-            .unwrap()
-            .add_component(antigen_rapier3d::RigidBodyComponent {
-                physics_sim_entity,
-                rigid_body_type: RigidBodyType::Dynamic,
-                handle: None,
-            });
-
         dir = cgmath::Matrix4::from_angle_x(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
     }
 
@@ -266,12 +256,10 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> (Entity, 
         let offset: cgmath::Vector3<f32> = dir.xyz();
         world.push((
             antigen_cgmath::components::Position3d::new(offset * 3.0),
-            antigen_cgmath::components::Orientation::default(),
             crate::components::SphereBounds(1.0),
-            crate::components::Visible(true),
             antigen_rapier3d::RigidBodyComponent {
                 physics_sim_entity,
-                rigid_body_type: RigidBodyType::KinematicVelocityBased,
+                pending_rigid_body: Some(RigidBodyBuilder::new_kinematic_velocity_based().build()),
                 handle: None,
             },
             antigen_rapier3d::ColliderComponent {

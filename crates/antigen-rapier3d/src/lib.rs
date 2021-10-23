@@ -146,10 +146,10 @@ pub fn rapier3d_tick_hooks_events<
     )
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RigidBodyComponent {
     pub physics_sim_entity: Entity,
-    pub rigid_body_type: RigidBodyType,
+    pub pending_rigid_body: Option<RigidBody>,
     pub handle: Option<RigidBodyHandle>,
 }
 
@@ -175,35 +175,29 @@ pub fn create_rigid_bodies(
     position: Option<&mut antigen_cgmath::components::Position3d>,
     orientation: Option<&mut antigen_cgmath::components::Orientation>,
 ) {
-    if rigid_body.handle.is_none() {
+    if let Some(mut pending) = rigid_body.pending_rigid_body.take() {
         if let Ok(rigid_body_set) =
             <&mut RigidBodySet>::query().get_mut(world, rigid_body.physics_sim_entity)
         {
-            let builder = RigidBodyBuilder::new(rigid_body.rigid_body_type);
-
-            let builder = if let Some(position) = position {
-                builder.translation(vector![position.x, position.y, position.z])
-            } else {
-                builder
-            };
+            if let Some(position) = position {
+                pending.set_translation(vector![position.x, position.y, position.z], true);
+            }
 
             /*
-            let builder = if let Some(orientation) = orientation {
-                builder.rotation(
+            if let Some(orientation) = orientation {
+                pending.set_rotation(
                     nalgebra::Quaternion::new(
                         orientation.s,
                         orientation.v.x,
                         orientation.v.y,
                         orientation.v.z,
-                    )
+                    ),
+                    true,
                 )
-            } else {
-                builder
-            };
+            }
             */
 
-            let body = builder.build();
-            rigid_body.handle = Some(rigid_body_set.insert(body));
+            rigid_body.handle = Some(rigid_body_set.insert(pending));
         }
     }
 }
