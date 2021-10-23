@@ -3,7 +3,7 @@ use wgpu::Buffer;
 use serde::ser::SerializeStruct;
 
 #[derive(Debug, Clone)]
-pub struct BufferComponent(Arc<Buffer>);
+pub struct BufferComponent(pub Arc<Buffer>);
 
 impl Deref for BufferComponent {
     type Target = Arc<Buffer>;

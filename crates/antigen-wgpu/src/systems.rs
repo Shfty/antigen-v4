@@ -5,7 +5,7 @@ use antigen_winit::components::WindowComponent;
 use legion::{
     query::IntoQuery, storage::Component, systems::Builder, world::SubWorld, Entity, World,
 };
-use wgpu::{Queue, SurfaceConfiguration};
+use wgpu::{ImageCopyTexture, ImageCopyTextureBase, Queue, SurfaceConfiguration};
 
 use crate::{
     components::{
@@ -125,8 +125,20 @@ pub fn texture_write<
                 let data_layout = *texture_write.data_layout();
                 let extent = *texture_write.extent();
 
-                let mut copy_tex = texture.as_image_copy();
-                copy_tex.origin.z = texture_write.layer();
+                let ImageCopyTextureBase {
+                    mip_level,
+                    origin,
+                    aspect,
+                    ..
+                } = texture_write.image_copy_texture();
+
+                let copy_tex = ImageCopyTexture {
+                    texture,
+                    mip_level: *mip_level,
+                    origin: *origin,
+                    aspect: *aspect,
+                };
+
                 queue.write_texture(copy_tex, data, data_layout, extent);
             }
         }

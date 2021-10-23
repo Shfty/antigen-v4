@@ -118,9 +118,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
         BufferComponent::from(cube_renderer.take_indirect_buffer_handle());
 
     // Mandelbrot texture
-    let texture_entity = world.push((
-        TextureComponent::from(cube_renderer.take_texture_handle()),
-    ));
+    let texture_entity = world.push((TextureComponent::from(cube_renderer.take_texture_handle()),));
 
     let mandelbrot_texture_entity = world.push((
         ImageComponent::from(Image::mandelbrot_r8(256)),
@@ -137,7 +135,12 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
                 height: 256,
                 depth_or_array_layers: 1,
             },
-            0,
+            wgpu::ImageCopyTextureBase {
+                texture: (),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
         ),
     ));
 
@@ -156,7 +159,15 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
                 height: 256,
                 depth_or_array_layers: 1,
             },
-            1,
+            wgpu::ImageCopyTextureBase {
+                texture: (),
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    z: 1,
+                    ..wgpu::Origin3d::ZERO
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
         ),
     ));
 

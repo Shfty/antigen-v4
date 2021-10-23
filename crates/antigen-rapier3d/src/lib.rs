@@ -1,4 +1,4 @@
-use legion::{query::IntoQuery, world::SubWorld, Entity};
+use legion::{Entity, query::IntoQuery, systems::Builder, world::SubWorld};
 pub use rapier3d;
 
 use antigen_cgmath::cgmath::InnerSpace;
@@ -362,4 +362,14 @@ pub fn rigid_body_kinematic_velocity(
             }
         }
     }
+}
+
+pub fn systems(builder: &mut Builder) -> &mut Builder {
+    builder
+        .add_system(create_rigid_bodies_system())
+        .add_system(create_colliders_system())
+        .add_system(rigid_body_kinematic_position_system())
+        .add_system(rigid_body_kinematic_velocity_system())
+        .add_system(rapier3d_tick_system())
+        .add_system(rigid_body_readback_system())
 }

@@ -26,7 +26,7 @@ use crate::{
     Shared, SharedState,
 };
 
-const DEBUGGER: bool = false;
+const DEBUGGER: bool = true;
 
 const GAME_TICK_HZ: f64 = 60.0;
 const GAME_TICK_SECS: f64 = 1.0 / GAME_TICK_HZ;
@@ -50,16 +50,12 @@ pub fn game_thread<'a>(
 
         antigen_winit::systems::systems(&mut builder);
         antigen_wgpu::systems::systems(&mut builder);
+        antigen_rapier3d::systems(&mut builder);
 
         builder
+            .flush()
             .add_system(crate::renderers::cube::update_look_system())
             .flush()
-            .add_system(antigen_rapier3d::create_rigid_bodies_system())
-            .add_system(antigen_rapier3d::create_colliders_system())
-            .add_system(antigen_rapier3d::rigid_body_kinematic_position_system())
-            .add_system(antigen_rapier3d::rigid_body_kinematic_velocity_system())
-            .add_system(antigen_rapier3d::rapier3d_tick_system())
-            .add_system(antigen_rapier3d::rigid_body_readback_system())
             .add_system(antigen_wgpu::systems::aspect_ratio_system())
             .add_system(antigen_cgmath::systems::look_at_quat_system())
             .add_system(antigen_cgmath::systems::perspective_projection_system())

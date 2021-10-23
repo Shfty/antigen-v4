@@ -3,7 +3,7 @@ use bytemuck::{Pod, Zeroable};
 use cgmath::{One, Zero};
 use lazy::Lazy;
 use on_change::{OnChange, OnChangeTrait};
-use std::{borrow::Cow, num::NonZeroU32, sync::Arc};
+use std::{borrow::Cow, sync::Arc};
 use wgpu::{
     BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, BufferAddress,
     BufferDescriptor, ComputePipeline, Device, RenderPipeline, ShaderModuleDescriptor,
@@ -388,16 +388,13 @@ impl CubeRenderer {
         }));
 
         // Create the texture
-        let size = 256u32;
-        let texture_extent = wgpu::Extent3d {
-            width: size,
-            height: size,
-            depth_or_array_layers: texture_count,
-        };
-
         let texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
             label: None,
-            size: texture_extent,
+            size: wgpu::Extent3d {
+                width: 256,
+                height: 256,
+                depth_or_array_layers: texture_count,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -499,7 +496,7 @@ impl CubeRenderer {
             label: None,
         });
 
-        let compute_shader_desc = ShaderModuleDescriptor {
+        let compute_shader = device.create_shader_module(&ShaderModuleDescriptor {
             label: None,
             source: ShaderSource::Wgsl(Cow::Owned(format!(
                 "{}\n{}\n{}\n{}",
@@ -508,19 +505,16 @@ impl CubeRenderer {
                 include_str!("frustum.wgsl"),
                 include_str!("compute.wgsl")
             ))),
-        };
+        });
 
-        let render_shader_desc = ShaderModuleDescriptor {
+        let render_shader = device.create_shader_module(&ShaderModuleDescriptor {
             label: None,
             source: ShaderSource::Wgsl(Cow::Owned(format!(
                 "{}\n{}",
                 include_str!("quaternion.wgsl"),
                 include_str!("render.wgsl")
             ))),
-        };
-
-        let compute_shader = device.create_shader_module(&compute_shader_desc);
-        let render_shader = device.create_shader_module(&render_shader_desc);
+        });
 
         let pipelines = Lazy::new(Box::new(
             move |(device, format): (Arc<Device>, TextureFormat)| {
@@ -648,29 +642,29 @@ impl CubeRenderer {
             vertex([0.5, 0.5, 0.5], [1.0, 1.0], 0),
             vertex([-0.5, 0.5, 0.5], [0.0, 1.0], 0),
             // bottom (0, 0, -0.5)
-            vertex([-0.5, 0.5, -0.5], [1.0, 0.0], 1),
-            vertex([0.5, 0.5, -0.5], [0.0, 0.0], 1),
-            vertex([0.5, -0.5, -0.5], [0.0, 1.0], 1),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 1),
+            vertex([-0.5, 0.5, -0.5], [1.0, 0.0], 0),
+            vertex([0.5, 0.5, -0.5], [0.0, 0.0], 0),
+            vertex([0.5, -0.5, -0.5], [0.0, 1.0], 0),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 0),
             // right (0.5, 0, 0)
             vertex([0.5, -0.5, -0.5], [0.0, 0.0], 0),
-            vertex([0.5, 0.5, -0.5], [1.0, 0.0], 1),
-            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 1),
-            vertex([0.5, -0.5, 0.5], [0.0, 1.0], 1),
+            vertex([0.5, 0.5, -0.5], [1.0, 0.0], 0),
+            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 0),
+            vertex([0.5, -0.5, 0.5], [0.0, 1.0], 0),
             // left (-0.5, 0, 0)
             vertex([-0.5, -0.5, 0.5], [1.0, 0.0], 0),
             vertex([-0.5, 0.5, 0.5], [0.0, 0.0], 0),
-            vertex([-0.5, 0.5, -0.5], [0.0, 1.0], 1),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 1),
+            vertex([-0.5, 0.5, -0.5], [0.0, 1.0], 0),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 0),
             // front (0, 0.5, 0)
             vertex([0.5, 0.5, -0.5], [1.0, 0.0], 0),
             vertex([-0.5, 0.5, -0.5], [0.0, 0.0], 0),
             vertex([-0.5, 0.5, 0.5], [0.0, 1.0], 0),
-            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 1),
+            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 0),
             // back (0, -0.5, 0)
-            vertex([0.5, -0.5, 0.5], [0.0, 0.0], 1),
+            vertex([0.5, -0.5, 0.5], [0.0, 0.0], 0),
             vertex([-0.5, -0.5, 0.5], [1.0, 0.0], 0),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 1),
+            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 0),
             vertex([0.5, -0.5, -0.5], [0.0, 1.0], 0),
         ];
 

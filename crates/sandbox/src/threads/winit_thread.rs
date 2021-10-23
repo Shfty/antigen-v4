@@ -1,11 +1,20 @@
-use std::{sync::{Arc, atomic::{AtomicBool, Ordering}}, thread::JoinHandle};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    thread::JoinHandle,
+};
 
 use antigen_wgpu::WgpuResponder;
-use antigen_winit::{WinitResponder, components::RedrawMode};
+use antigen_winit::{components::RedrawMode, WinitResponder};
 use legion::{Entity, Resources, Schedule, World};
 use parking_lot::Mutex;
 use wgpu::SurfaceTexture;
-use winit::{event::{Event, WindowEvent}, event_loop::{ControlFlow, EventLoopWindowTarget}};
+use winit::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoopWindowTarget},
+};
 
 #[profiling::function]
 pub fn winit_thread<'a>(
@@ -64,7 +73,7 @@ pub fn winit_thread<'a>(
                             return None;
                         };
 
-                        redraw_window(&wgpu_responder, &entity, &mut encoder, &frame);
+                        redraw_surface_texture(&wgpu_responder, &entity, &mut encoder, &frame);
 
                         Some(frame)
                     })
@@ -110,7 +119,7 @@ pub fn winit_thread<'a>(
                     return;
                 };
 
-                redraw_window(&wgpu_responder, &entity, &mut encoder, &frame);
+                redraw_surface_texture(&wgpu_responder, &entity, &mut encoder, &frame);
 
                 wgpu_responder
                     .queue()
@@ -151,17 +160,26 @@ pub fn winit_thread<'a>(
     }
 }
 
-fn redraw_window(
+fn redraw_surface_texture(
     wgpu_responder: &WgpuResponder,
     entity: &Entity,
     encoder: &mut wgpu::CommandEncoder,
-    frame: &SurfaceTexture,
+    surface_texture: &SurfaceTexture,
+) {
+    let view = surface_texture
+        .texture
+        .create_view(&wgpu::TextureViewDescriptor::default());
+
+    redraw_view(wgpu_responder, entity, encoder, &view)
+}
+
+fn redraw_view(
+    wgpu_responder: &WgpuResponder,
+    entity: &Entity,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
 ) {
     if let Some(render_passes) = wgpu_responder.entity_render_passes(&entity) {
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
         let config = wgpu_responder.surface_configuration(entity).unwrap().read();
 
         for render_pass_id in render_passes.iter() {

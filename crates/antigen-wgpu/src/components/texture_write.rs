@@ -3,17 +3,17 @@ use std::marker::PhantomData;
 use legion::Entity;
 use on_change::OnChangeTrait;
 use serde::ser::SerializeStruct;
-use wgpu::{Extent3d, ImageDataLayout};
+use wgpu::{Extent3d, ImageCopyTexture, ImageCopyTextureBase, ImageDataLayout};
 
 use crate::CastSlice;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct TextureWrite<T: OnChangeTrait<D>, D: CastSlice<u8>> {
     from: Option<Entity>,
     to: Option<Entity>,
     data_layout: ImageDataLayout,
     extent: Extent3d,
-    layer: u32,
+    image_copy_texture: ImageCopyTextureBase<()>,
     _phantom: PhantomData<(T, D)>,
 }
 
@@ -44,14 +44,14 @@ impl<T: OnChangeTrait<D>, D: CastSlice<u8>> TextureWrite<T, D> {
         to: Option<Entity>,
         data_layout: ImageDataLayout,
         extent: Extent3d,
-        layer: u32,
+        image_copy_texture: ImageCopyTextureBase<()>,
     ) -> Self {
         TextureWrite {
             from,
             to,
             data_layout,
             extent,
-            layer,
+            image_copy_texture,
             _phantom: Default::default(),
         }
     }
@@ -72,7 +72,7 @@ impl<T: OnChangeTrait<D>, D: CastSlice<u8>> TextureWrite<T, D> {
         &self.extent
     }
 
-    pub fn layer(&self) -> u32 {
-        self.layer
+    pub fn image_copy_texture(&self) -> &ImageCopyTextureBase<()> {
+        &self.image_copy_texture
     }
 }
