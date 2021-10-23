@@ -12,7 +12,7 @@ use wgpu::{
 
 use antigen_resources::Timing;
 
-use antigen_cgmath::components::{EyePosition, FieldOfView, LookAt, ProjectionMatrix, Position3d};
+use antigen_cgmath::components::{EyePosition, FieldOfView, LookAt, Position3d, ProjectionMatrix};
 use antigen_wgpu::DrawIndexedIndirect;
 
 #[repr(C)]
@@ -47,7 +47,17 @@ impl OnChangeTrait<Vec<Vertex>> for Vertices {
 legion_debugger::register_component!(Vertices);
 
 #[repr(C)]
-#[derive(Default, Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    PartialOrd,
+    Pod,
+    Zeroable,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Uniforms {
     _position: [f32; 4],
     _orientation: [f32; 4],
@@ -104,7 +114,9 @@ impl OnChangeTrait<Uniforms> for UniformsComponent {
 legion_debugger::register_component!(UniformsComponent);
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, PartialEq, PartialOrd, Pod, Zeroable, serde::Serialize, serde::Deserialize,
+)]
 pub struct Instance {
     _position: [f32; 4],
     _orientation: [f32; 4],
@@ -794,57 +806,59 @@ pub fn update_look(
 }
 
 #[legion::system(par_for_each)]
-pub fn update_projection(field_of_view: &mut FieldOfView, #[resource] timing: &Timing) {
-    let total = timing.total_time().as_secs_f32();
-    let fov = 90.0;//((total * 0.2).sin() * 90.0) + 90.0;
-    field_of_view.set_fov(cgmath::Deg(fov));
-}
-
-#[legion::system(par_for_each)]
 pub fn update_instances(
-    position: &Position3d,
-    orientation: &antigen_cgmath::components::Orientation,
-    visible: &crate::components::Visible,
-    sphere_bounds: &crate::components::SphereBounds,
+    position: Option<&Position3d>,
+    orientation: Option<&antigen_cgmath::components::Orientation>,
+    visible: Option<&crate::components::Visible>,
+    sphere_bounds: Option<&crate::components::SphereBounds>,
     instance: &mut InstanceComponent,
 ) {
-    let inst = *instance.get();
+    let mut inst = *instance.get();
 
-    let pos: [f32; 3] = *(*position).as_ref();
-    let pos = [pos[0], pos[1], pos[2], 0.0];
+    if let Some(position) = position {
+        let pos: [f32; 3] = *(*position).as_ref();
+        inst._position = [pos[0], pos[1], pos[2], 0.0];
+    }
 
-    let quat: [f32; 4] = *(*orientation).as_ref();
+    if let Some(orientation) = orientation {
+        inst._orientation = *(*orientation).as_ref();
+    }
 
-    let visible = **visible;
+    if let Some(visible) = visible {
+        inst._visible = **visible as u32;
+    }
 
-    let radius = **sphere_bounds;
+    if let Some(sphere_bounds) = sphere_bounds {
+        inst._radius = **sphere_bounds;
+    }
 
-    instance.set(Instance {
-        _position: pos,
-        _orientation: quat,
-        _visible: visible as u32,
-        _radius: radius,
-        ..inst
-    })
+    instance.set_checked(inst)
 }
 
 #[legion::system(par_for_each)]
 pub fn update_uniforms(
-    projection_matrix: &ProjectionMatrix,
-    eye_position: &EyePosition,
-    orientation: &antigen_cgmath::components::Orientation,
+    projection_matrix: Option<&ProjectionMatrix>,
+    eye_position: Option<&EyePosition>,
+    orientation: Option<&antigen_cgmath::components::Orientation>,
     uniforms: &mut UniformsComponent,
 ) {
-    let mx: [f32; 16] = *(*projection_matrix).as_ref();
+    let mut u = *uniforms.get();
 
-    let pos: [f32; 3] = *(*eye_position).as_ref();
-    let pos = [pos[0], pos[1], pos[2], 0.0];
+    if let Some(eye_position) = eye_position {
+        let pos: [f32; 3] = *(*eye_position).as_ref();
+        let pos = [pos[0], pos[1], pos[2], 0.0];
+        u._position = pos;
+    }
 
-    let quat: [f32; 4] = *(orientation).as_ref();
+    if let Some(orientation) = orientation {
+        let quat: [f32; 4] = *(orientation).as_ref();
+        u._orientation = quat;
+    }
 
-    uniforms.set(Uniforms {
-        _position: pos,
-        _orientation: quat,
-        _projection: mx,
-    })
+    if let Some(projection_matrix) = projection_matrix {
+        let mx: [f32; 16] = *(*projection_matrix).as_ref();
+        u._projection = mx;
+    }
+
+    uniforms.set_checked(u)
 }

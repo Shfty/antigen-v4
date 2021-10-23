@@ -1,14 +1,18 @@
+[ ] Better model / texture loading generalization
+[ ] Map loading
+[ ] Portal system
+
 * antigen-rapier
     [✓] Need to build a transform abstraction before integrating
         * Probably best to separate into position / rotation / scale
         * Use quaternions for rotation
         * Split view from projection matrix as position / rotation
         * Can probably leverage cgmath Isometry
-    [ ] Manager pattern similar to winit / wgpu
+    [✓] Manager pattern similar to winit / wgpu
         * Will be simpler as physics runs on the game thread
         * Wrap rapier simulation structures into a single struct
-    [ ] Tick physics from a system
-    [ ] Read back rigidbody transforms into respective components in a system
+    [✓] Tick physics from a system
+    [✓] Read back rigidbody transforms into respective components in a system
 
 * on-change
     [✓] Implement OnChange<T> wrapper struct w/state and dirty flag

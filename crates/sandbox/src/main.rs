@@ -1,33 +1,19 @@
-mod assemblages;
 /// Sandbox
 ///
 /// Development sandbox for antigen functionality
+mod assemblages;
 mod components;
 mod renderers;
 mod resources;
 mod systems;
 mod threads;
 
-use antigen_cgmath::components::ViewProjectionMatrix;
-use antigen_components::{Image, ImageComponent};
-use antigen_resources::Timing;
-use antigen_wgpu::{WgpuManager, WgpuRequester, WgpuResponder};
-
-use components::*;
-use crossterm::event::{Event as CrosstermEvent, KeyCode, KeyEvent};
+use antigen_winit::window_manager::WindowManager;
 use resources::*;
-use systems::*;
 
-use crossbeam_channel::{Receiver, Sender};
+use antigen_wgpu::WgpuManager;
 use legion_debugger::{Archetypes, Entities};
-use reflection::data::Data;
-
-use antigen_winit::{
-    components::RedrawMode, window_manager::WindowManager, WinitRequester, WinitResponder,
-};
-use reflection_tui::{standard_widgets, DataWidget, ReflectionWidget, ReflectionWidgetState};
 use remote_channel::*;
-use tui_debugger::Resources as TraceResources;
 
 use legion::*;
 use parking_lot::{Mutex, RwLock};
@@ -85,7 +71,7 @@ trait SharedState: Send + Sync {
 pub struct Shared {
     trace_archetypes: Arc<RwLock<Archetypes>>,
     trace_entities: Arc<RwLock<Entities>>,
-    trace_resources: Arc<RwLock<TraceResources>>,
+    trace_resources: Arc<RwLock<tui_debugger::Resources>>,
 }
 
 impl SharedState for Shared {

@@ -53,7 +53,6 @@ pub fn game_thread<'a>(
 
         builder
             .add_system(crate::renderers::cube::update_look_system())
-            .add_system(crate::renderers::cube::update_projection_system())
             .flush()
             .add_system(antigen_rapier3d::create_rigid_bodies_system())
             .add_system(antigen_rapier3d::create_colliders_system())
