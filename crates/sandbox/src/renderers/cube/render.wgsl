@@ -8,12 +8,12 @@ struct Locals {
 struct VertexInput {
     [[location(0)]] position: vec4<f32>;
     [[location(1)]] tex_coord: vec2<f32>;
+    [[location(2)]] texture: i32;
 };
 
 struct InstanceInput {
     [[location(3)]] position: vec4<f32>;
     [[location(4)]] orientation: vec4<f32>;
-    [[location(5)]] texture: i32;
 };
 
 struct VertexOutput {
@@ -45,7 +45,7 @@ fn vs_main(
     var out: VertexOutput;
     out.position = r_locals.projection * vec4<f32>(model_tx, model.position.w);
     out.tex_coord = model.tex_coord;
-    out.texture = instance.texture;
+    out.texture = model.texture;
     return out;
 }
 

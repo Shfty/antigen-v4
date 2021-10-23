@@ -114,10 +114,9 @@ legion_debugger::register_component!(UniformsComponent);
 pub struct Instance {
     _position: [f32; 4],
     _orientation: [f32; 4],
-    _texture: i32,
     _visible: u32,
     _radius: f32,
-    _pad: [u32; 1],
+    _pad: [u32; 2],
 }
 
 impl Default for Instance {
@@ -126,7 +125,6 @@ impl Default for Instance {
             _position: Default::default(),
             _orientation: [0.0, 0.0, 0.0, 1.0],
             _visible: 1,
-            _texture: 0,
             _radius: 0.0,
             _pad: Default::default(),
         }
@@ -166,7 +164,6 @@ impl InstanceComponent {
         InstanceComponent(OnChange::new_dirty(Instance {
             _position: pos,
             _orientation: quat,
-            _texture: texture,
             _visible: visible,
             _radius: radius,
             _pad: Default::default(),
@@ -334,11 +331,6 @@ impl CubeRenderer {
                     offset: 4 * 4,
                     shader_location: 4,
                 },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Sint32,
-                    offset: 4 * 8,
-                    shader_location: 5,
-                }
             ],
         },
     ];

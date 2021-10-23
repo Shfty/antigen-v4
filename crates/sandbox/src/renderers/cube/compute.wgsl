@@ -8,7 +8,6 @@ struct Uniforms {
 struct Instance {
     position: vec4<f32>;
     orientation: Quaternion;
-    texture: i32;
     visible: u32;
     radius: f32;
 };
