@@ -46,3 +46,4 @@ antigen-rapier3d = { path = "../antigen-rapier3d" }
 remote-channel = { path = "../remote-channel" }
 lazy = { path = "../lazy" }
 on-change = { path = "../on-change" }
+shambler = { path = "../../../sif/crates/shambler" }

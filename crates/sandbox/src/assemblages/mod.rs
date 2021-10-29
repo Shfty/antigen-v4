@@ -15,7 +15,7 @@ use antigen_wgpu::{
 };
 use antigen_winit::components::{RedrawMode, RedrawModeComponent, WindowComponent, WindowTitle};
 
-use cgmath::{InnerSpace, One};
+use cgmath::{InnerSpace, One, Zero};
 use legion::{Entity, World};
 use wgpu::BufferAddress;
 
@@ -77,9 +77,92 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     let tetrahedron_count = 16u32;
     let cube_count = 16u32;
 
-    let vertex_count = tetrahedron_vertices.len() + cube_vertices.len();
-    let index_count = tetrahedron_indices.len() + cube_indices.len();
-    let instance_count = tetrahedron_count + cube_count;
+    let tetrahedron_vertices_len = tetrahedron_vertices.len();
+    let tetrahedron_indices_len = tetrahedron_indices.len();
+
+    let cube_vertices_len = cube_vertices.len();
+    let cube_indices_len = cube_indices.len();
+
+    // Load obj
+    //let source = include_bytes!("../renderers/skybox/models/marauder.obj");
+    //let data = obj::ObjData::load_buf(&source[..]).unwrap();
+
+    /*
+    let mut obj_vertices = Vec::new();
+    let mut obj_indices = Vec::new();
+
+    for object in data.objects {
+        for group in object.groups {
+            for poly in group.polys {
+                for end_index in 2..poly.0.len() {
+                    for &index in &[0, end_index - 1, end_index] {
+                        let obj::IndexTuple(position_id, texture_id, _) = poly.0[index];
+
+                        let mut pos = data.position[position_id];
+                        pos[0] *= 0.025;
+                        pos[1] *= 0.025;
+                        pos[2] *= 0.025;
+
+                        obj_vertices.push(crate::renderers::cube::vertex(
+                            pos,
+                            data.texture[texture_id.unwrap()],
+                            0,
+                        ));
+
+                        obj_indices.push(obj_indices.len() as u16);
+                    }
+                }
+            }
+        }
+    }
+    */
+
+    // Parse map
+    let map = include_str!("../../../../../sif/crates/shalrath/test_data/abstract-test.map");
+    let map = map.parse::<shambler::shalrath::repr::Map>().unwrap();
+
+    // Build mesh
+    let shambler::Mesh {
+        vertices,
+        normals,
+        uvs,
+        triangle_indices,
+        ..
+    } = shambler::map_mesh(map);
+
+    let mut obj_vertices = vertices
+        .into_iter()
+        .zip(normals.into_iter().zip(uvs.into_iter()))
+        .map(|(vertex, (normal, uv))| {
+            crate::renderers::cube::vertex(
+                [vertex.x / 64.0, vertex.z / 64.0, vertex.y / 64.0],
+                [normal.x, normal.z, normal.y],
+                [uv.x, uv.y],
+                0,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut obj_indices = triangle_indices
+        .into_iter()
+        .map(|i| i as u16)
+        .collect::<Vec<_>>();
+
+    obj_vertices.resize(
+        obj_vertices.len() + (obj_vertices.len() % wgpu::COPY_BUFFER_ALIGNMENT as usize),
+        Default::default(),
+    );
+    obj_indices.resize(
+        obj_indices.len() + (obj_indices.len() % wgpu::COPY_BUFFER_ALIGNMENT as usize),
+        Default::default(),
+    );
+
+    let obj_vertices_len = obj_vertices.len();
+    let obj_indices_len = obj_indices.len();
+
+    let vertex_count = tetrahedron_vertices_len + cube_vertices_len + obj_vertices_len;
+    let index_count = tetrahedron_indices_len + cube_indices_len + obj_indices_len;
+    let instance_count = tetrahedron_count + cube_count + 1;
 
     // Physics simulation
     let physics_sim_entity = world.push((
@@ -117,7 +200,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     let indirect_buffer_component =
         BufferComponent::from(cube_renderer.take_indirect_buffer_handle());
 
-    // Mandelbrot texture
+    // Texture array
     let texture_entity = world.push((TextureComponent::from(cube_renderer.take_texture_handle()),));
 
     let mandelbrot_texture_entity = world.push((
@@ -171,6 +254,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
         ),
     ));
 
+    // Register pass with renderer
     let cube_pass_id = wgpu_manager.add_render_pass(Box::new(cube_renderer));
 
     let mut cube_pass_component = RenderPassComponent::default();
@@ -219,7 +303,8 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
         BufferWriteVertices::new(
             None,
             Some(vertex_buffer_entity),
-            (std::mem::size_of::<crate::renderers::cube::Vertex>() * 4) as wgpu::BufferAddress,
+            (std::mem::size_of::<crate::renderers::cube::Vertex>() * tetrahedron_vertices_len)
+                as wgpu::BufferAddress,
         ),
     ));
 
@@ -228,13 +313,36 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
         BufferWriteIndices::new(
             None,
             Some(index_buffer_entity),
-            (std::mem::size_of::<u16>() * 12) as wgpu::BufferAddress,
+            (std::mem::size_of::<crate::renderers::cube::Index>() * tetrahedron_indices_len)
+                as wgpu::BufferAddress,
+        ),
+    ));
+
+    // OBJ mesh
+    let obj_vertices_entity = world.push((
+        crate::renderers::cube::Vertices::new(obj_vertices),
+        BufferWriteVertices::new(
+            None,
+            Some(vertex_buffer_entity),
+            (std::mem::size_of::<crate::renderers::cube::Vertex>()
+                * (tetrahedron_vertices_len + cube_vertices_len))
+                as wgpu::BufferAddress,
+        ),
+    ));
+
+    let obj_indices_entity = world.push((
+        crate::renderers::cube::Indices::new(obj_indices),
+        BufferWriteIndices::new(
+            None,
+            Some(index_buffer_entity),
+            (std::mem::size_of::<crate::renderers::cube::Index>()
+                * (tetrahedron_indices_len + cube_indices_len)) as wgpu::BufferAddress,
         ),
     ));
 
     // Indirect draw data
     let tetrahedron_indirect = antigen_wgpu::DrawIndexedIndirect {
-        vertex_count: 12,
+        vertex_count: tetrahedron_indices_len as u32,
         instance_count: 1,
         base_index: 0,
         vertex_offset: 0,
@@ -242,10 +350,18 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     };
 
     let cube_indirect = antigen_wgpu::DrawIndexedIndirect {
-        vertex_count: 36,
+        vertex_count: cube_indices_len as u32,
         instance_count: 1,
-        base_index: 12,
-        vertex_offset: 4,
+        base_index: tetrahedron_indices_len as u32,
+        vertex_offset: tetrahedron_vertices_len as i32,
+        base_instance: 0,
+    };
+
+    let obj_indirect = antigen_wgpu::DrawIndexedIndirect {
+        vertex_count: obj_indices_len as u32,
+        instance_count: 1,
+        base_index: (tetrahedron_indices_len + cube_indices_len) as u32,
+        vertex_offset: (tetrahedron_vertices_len + cube_vertices_len) as i32,
         base_instance: 0,
     };
 
@@ -353,6 +469,29 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
 
         dir = cgmath::Matrix4::from_angle_y(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
     }
+
+    // OBJ entity
+    world.push((
+        antigen_cgmath::components::Position3d::new(cgmath::Vector3::zero()),
+        crate::components::SphereBounds(3.0),
+        crate::renderers::cube::InstanceComponent::default(),
+        BufferWriteInstances::new(
+            None,
+            Some(instance_buffer_entity),
+            std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
+                * (tetrahedron_count + cube_count) as wgpu::BufferAddress,
+        ),
+        crate::renderers::cube::IndexedIndirectComponent::new(antigen_wgpu::DrawIndexedIndirect {
+            base_instance: tetrahedron_count + cube_count,
+            ..obj_indirect
+        }),
+        BufferWriteIndexedIndirect::new(
+            None,
+            Some(indirect_buffer_entity),
+            std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>() as wgpu::BufferAddress
+                * (tetrahedron_count + cube_count) as wgpu::BufferAddress,
+        ),
+    ));
 }
 
 pub fn msaa_lines_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {

@@ -26,7 +26,7 @@ use crate::{
     Shared, SharedState,
 };
 
-const DEBUGGER: bool = true;
+const DEBUGGER: bool = false;
 
 const GAME_TICK_HZ: f64 = 60.0;
 const GAME_TICK_SECS: f64 = 1.0 / GAME_TICK_HZ;

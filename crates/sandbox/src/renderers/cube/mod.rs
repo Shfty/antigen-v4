@@ -7,7 +7,7 @@ use std::{borrow::Cow, sync::Arc};
 use wgpu::{
     BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, BufferAddress,
     BufferDescriptor, ComputePipeline, Device, RenderPipeline, ShaderModuleDescriptor,
-    ShaderSource, Texture, TextureFormat, VertexBufferLayout,
+    ShaderSource, Texture, TextureFormat, TextureView, VertexBufferLayout,
 };
 
 use antigen_resources::Timing;
@@ -16,18 +16,24 @@ use antigen_cgmath::components::{EyePosition, LookAt, Position3d, ProjectionMatr
 use antigen_wgpu::DrawIndexedIndirect;
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Default, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct Vertex {
-    _pos: [f32; 4],
-    _tex_coord: [f32; 2],
-    _texture: i32,
+    pub pos: [f32; 3],
+    _pad_0: f32,
+    pub normal: [f32; 3],
+    _pad_1: f32,
+    pub tex_coord: [f32; 2],
+    pub texture: i32,
 }
 
-fn vertex(pos: [f32; 3], tc: [f32; 2], ti: i32) -> Vertex {
+pub fn vertex(pos: [f32; 3], normal: [f32; 3], tc: [f32; 2], ti: i32) -> Vertex {
     Vertex {
-        _pos: [pos[0], pos[1], pos[2], 1.0],
-        _tex_coord: [tc[0], tc[1]],
-        _texture: ti,
+        pos,
+        _pad_0: 1.0,
+        normal,
+        _pad_1: 0.0,
+        tex_coord: tc,
+        texture: ti,
     }
 }
 
@@ -242,15 +248,21 @@ pub struct CubeRenderer {
 
     texture: Arc<Texture>,
 
+    depth_texture: Option<TextureView>,
+
     pipelines: Lazy<
         (ComputePipeline, RenderPipeline, Option<RenderPipeline>),
         (Arc<Device>, TextureFormat),
     >,
 
     indirect_count: BufferAddress,
+    prev_width: u32,
+    prev_height: u32,
 }
 
 impl CubeRenderer {
+    const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
     const COMPUTE_BIND_GROUP_LAYOUT_DESC: BindGroupLayoutDescriptor<'static> =
         BindGroupLayoutDescriptor {
             label: None,
@@ -305,14 +317,19 @@ impl CubeRenderer {
                     shader_location: 0,
                 },
                 wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
+                    format: wgpu::VertexFormat::Float32x4,
                     offset: 4 * 4,
                     shader_location: 1,
                 },
                 wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Sint32,
-                    offset: 4 * 6,
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 4 * 8,
                     shader_location: 2,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Sint32,
+                    offset: 4 * 10,
+                    shader_location: 3,
                 },
             ],
         },
@@ -323,12 +340,12 @@ impl CubeRenderer {
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
                     offset: 0,
-                    shader_location: 3,
+                    shader_location: 4,
                 },
                 wgpu::VertexAttribute {
                     format: wgpu::VertexFormat::Float32x4,
                     offset: 4 * 4,
-                    shader_location: 4,
+                    shader_location: 5,
                 },
             ],
         },
@@ -544,7 +561,13 @@ impl CubeRenderer {
                             cull_mode: Some(wgpu::Face::Back),
                             ..Default::default()
                         },
-                        depth_stencil: None,
+                        depth_stencil: Some(wgpu::DepthStencilState {
+                            format: Self::DEPTH_FORMAT,
+                            depth_write_enabled: true,
+                            depth_compare: wgpu::CompareFunction::Less,
+                            stencil: wgpu::StencilState::default(),
+                            bias: wgpu::DepthBiasState::default(),
+                        }),
                         multisample: wgpu::MultisampleState::default(),
                     });
 
@@ -579,11 +602,17 @@ impl CubeRenderer {
                             }),
                             primitive: wgpu::PrimitiveState {
                                 front_face: wgpu::FrontFace::Ccw,
-                                cull_mode: Some(wgpu::Face::Back),
+                                cull_mode: None,
                                 polygon_mode: wgpu::PolygonMode::Line,
                                 ..Default::default()
                             },
-                            depth_stencil: None,
+                            depth_stencil: Some(wgpu::DepthStencilState {
+                                format: Self::DEPTH_FORMAT,
+                                depth_write_enabled: false,
+                                depth_compare: wgpu::CompareFunction::Always,
+                                stencil: wgpu::StencilState::default(),
+                                bias: wgpu::DepthBiasState::default(),
+                            }),
                             multisample: wgpu::MultisampleState::default(),
                         }),
                     )
@@ -604,8 +633,11 @@ impl CubeRenderer {
             instance_buffer,
             indirect_buffer,
             texture,
+            depth_texture: None,
             pipelines,
             indirect_count,
+            prev_width: 0,
+            prev_height: 0,
         }
     }
 
@@ -637,35 +669,35 @@ impl CubeRenderer {
         #[rustfmt::skip]
         let vertex_data = [
             // top (0, 0, 1)
-            vertex([-0.5, -0.5, 0.5], [0.0, 0.0], 0),
-            vertex([0.5, -0.5, 0.5], [1.0, 0.0], 0),
-            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 0),
-            vertex([-0.5, 0.5, 0.5], [0.0, 1.0], 0),
+            vertex([-0.5, -0.5, 0.5], [0.0, 0.0, 1.0], [0.0, 0.0], 0),
+            vertex([0.5, -0.5, 0.5], [0.0, 0.0, 1.0], [1.0, 0.0], 0),
+            vertex([0.5, 0.5, 0.5], [0.0, 0.0, 1.0], [1.0, 1.0], 0),
+            vertex([-0.5, 0.5, 0.5], [0.0, 0.0, 1.0], [0.0, 1.0], 0),
             // bottom (0, 0, -0.5)
-            vertex([-0.5, 0.5, -0.5], [1.0, 0.0], 0),
-            vertex([0.5, 0.5, -0.5], [0.0, 0.0], 0),
-            vertex([0.5, -0.5, -0.5], [0.0, 1.0], 0),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 0),
+            vertex([-0.5, 0.5, -0.5], [0.0, 0.0, -1.0], [1.0, 0.0], 0),
+            vertex([0.5, 0.5, -0.5], [0.0, 0.0, -1.0], [0.0, 0.0], 0),
+            vertex([0.5, -0.5, -0.5], [0.0, 0.0, -1.0], [0.0, 1.0], 0),
+            vertex([-0.5, -0.5, -0.5], [0.0, 0.0, -1.0], [1.0, 1.0], 0),
             // right (0.5, 0, 0)
-            vertex([0.5, -0.5, -0.5], [0.0, 0.0], 0),
-            vertex([0.5, 0.5, -0.5], [1.0, 0.0], 0),
-            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 0),
-            vertex([0.5, -0.5, 0.5], [0.0, 1.0], 0),
+            vertex([0.5, -0.5, -0.5], [1.0, 0.0, 0.0], [0.0, 0.0], 0),
+            vertex([0.5, 0.5, -0.5], [1.0, 0.0, 0.0], [1.0, 0.0], 0),
+            vertex([0.5, 0.5, 0.5], [1.0, 0.0, 0.0], [1.0, 1.0], 0),
+            vertex([0.5, -0.5, 0.5], [1.0, 0.0, 0.0], [0.0, 1.0], 0),
             // left (-0.5, 0, 0)
-            vertex([-0.5, -0.5, 0.5], [1.0, 0.0], 0),
-            vertex([-0.5, 0.5, 0.5], [0.0, 0.0], 0),
-            vertex([-0.5, 0.5, -0.5], [0.0, 1.0], 0),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 0),
+            vertex([-0.5, -0.5, 0.5], [-1.0, 0.0, 0.0], [1.0, 0.0], 0),
+            vertex([-0.5, 0.5, 0.5], [-1.0, 0.0, 0.0], [0.0, 0.0], 0),
+            vertex([-0.5, 0.5, -0.5], [-1.0, 0.0, 0.0], [0.0, 1.0], 0),
+            vertex([-0.5, -0.5, -0.5], [-1.0, 0.0, 0.0], [1.0, 1.0], 0),
             // front (0, 0.5, 0)
-            vertex([0.5, 0.5, -0.5], [1.0, 0.0], 0),
-            vertex([-0.5, 0.5, -0.5], [0.0, 0.0], 0),
-            vertex([-0.5, 0.5, 0.5], [0.0, 1.0], 0),
-            vertex([0.5, 0.5, 0.5], [1.0, 1.0], 0),
+            vertex([0.5, 0.5, -0.5], [0.0, 1.0, 0.0], [1.0, 0.0], 0),
+            vertex([-0.5, 0.5, -0.5], [0.0, 1.0, 0.0], [0.0, 0.0], 0),
+            vertex([-0.5, 0.5, 0.5], [0.0, 1.0, 0.0], [0.0, 1.0], 0),
+            vertex([0.5, 0.5, 0.5], [0.0, 1.0, 0.0], [1.0, 1.0], 0),
             // back (0, -0.5, 0)
-            vertex([0.5, -0.5, 0.5], [0.0, 0.0], 0),
-            vertex([-0.5, -0.5, 0.5], [1.0, 0.0], 0),
-            vertex([-0.5, -0.5, -0.5], [1.0, 1.0], 0),
-            vertex([0.5, -0.5, -0.5], [0.0, 1.0], 0),
+            vertex([0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [0.0, 0.0], 0),
+            vertex([-0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [1.0, 0.0], 0),
+            vertex([-0.5, -0.5, -0.5], [0.0, -1.0, 0.0], [1.0, 1.0], 0),
+            vertex([0.5, -0.5, -0.5], [0.0, -1.0, 0.0], [0.0, 1.0], 0),
         ];
 
         #[rustfmt::skip]
@@ -689,10 +721,10 @@ impl CubeRenderer {
 
         #[rustfmt::skip]
         let vertex_data = [
-            vertex([0.0, 0.0, 1.0], [0.0, 0.0], 1),
-            vertex([-c, d, -a], [1.0, 0.0], 1),
-            vertex([-c, -d, -a], [1.0, 1.0], 1),
-            vertex([b, 0.0, a], [0.0, 1.0], 1),
+            vertex([0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [0.0, 0.0], 1),
+            vertex([-c, d, -a], [0.0, 1.0, 0.0], [1.0, 0.0], 1),
+            vertex([-c, -d, -a], [0.0, 1.0, 0.0], [1.0, 1.0], 1),
+            vertex([b, 0.0, a], [0.0, 1.0, 0.0], [0.0, 1.0], 1),
         ];
 
         #[rustfmt::skip]
@@ -723,6 +755,27 @@ impl CubeRenderer {
             })
             .collect()
     }
+
+    fn create_depth_texture(
+        config: &wgpu::SurfaceConfiguration,
+        device: &wgpu::Device,
+    ) -> wgpu::TextureView {
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            label: None,
+        });
+
+        depth_texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
 }
 
 impl RenderPass for CubeRenderer {
@@ -736,6 +789,16 @@ impl RenderPass for CubeRenderer {
         let device = wgpu_manager.device();
         let (compute_pipeline, cube_pipeline, wire_pipeline) =
             self.pipelines.get((device, config.format));
+
+        // Recreate depth texture
+        if self.depth_texture.is_none()
+            || config.width != self.prev_width
+            || config.height != self.prev_height
+        {
+            self.depth_texture = Some(Self::create_depth_texture(config, &wgpu_manager.device()));
+            self.prev_width = config.width;
+            self.prev_height = config.height;
+        }
 
         // Compute
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
@@ -760,7 +823,14 @@ impl RenderPass for CubeRenderer {
                     store: true,
                 },
             }],
-            depth_stencil_attachment: None,
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: self.depth_texture.as_ref().unwrap(),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: true,
+                }),
+                stencil_ops: None,
+            }),
         });
 
         rpass.push_debug_group("Prepare data for draw.");
@@ -800,7 +870,7 @@ pub fn update_look(
     #[resource] timing: &Timing,
 ) {
     let total = timing.total_time().as_secs_f32();
-    let pos = cgmath::Point3::new(total.sin() * 5.0, 5.0, total.cos() * 1.5);
+    let pos = cgmath::Point3::new(total.sin() * 5.0, 2.5, total.cos() * 1.5);
     *eye_position = pos;
 }
 

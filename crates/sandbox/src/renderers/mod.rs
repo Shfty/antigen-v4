@@ -1,5 +1,4 @@
 pub mod hello_triangle;
-pub mod ecs_triangle;
 pub mod cube;
 pub mod msaa_lines;
 pub mod boids;
