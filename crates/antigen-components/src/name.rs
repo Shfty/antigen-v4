@@ -5,6 +5,12 @@ use std::borrow::Cow;
 )]
 pub struct Name(pub Cow<'static, str>);
 
+impl Name {
+    pub fn new<T: Into<Cow<'static, str>>>(v: T) -> Self {
+        Name(v.into())
+    }
+}
+
 impl std::ops::Deref for Name {
     type Target = Cow<'static, str>;
 
