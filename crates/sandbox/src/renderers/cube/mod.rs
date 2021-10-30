@@ -38,6 +38,14 @@ pub type BufferWriteIndices =
     BufferWrite<crate::renderers::cube::Indices, Vec<crate::renderers::cube::Index>>;
 legion_debugger::register_component!(BufferWriteIndices);
 
+pub type BufferWritePosition =
+    BufferWrite<antigen_cgmath::components::Position3d, antigen_cgmath::cgmath::Vector3<f32>>;
+legion_debugger::register_component!(BufferWritePosition);
+
+pub type BufferWriteOrientation =
+    BufferWrite<antigen_cgmath::components::Orientation, antigen_cgmath::cgmath::Quaternion<f32>>;
+legion_debugger::register_component!(BufferWriteOrientation);
+
 pub type BufferWriteInstances =
     BufferWrite<crate::renderers::cube::InstanceComponent, crate::renderers::cube::Instance>;
 legion_debugger::register_component!(BufferWriteInstances);
@@ -47,21 +55,6 @@ pub type BufferWriteIndexedIndirect = BufferWrite<
     antigen_wgpu::DrawIndexedIndirect,
 >;
 legion_debugger::register_component!(BufferWriteIndexedIndirect);
-
-pub type VertexBufferComponent = BufferComponent<Vec<Vertex>>;
-legion_debugger::register_component!(VertexBufferComponent);
-
-pub type IndexBufferComponent = BufferComponent<Vec<Index>>;
-legion_debugger::register_component!(IndexBufferComponent);
-
-pub type InstanceBufferComponent = BufferComponent<Instance>;
-legion_debugger::register_component!(InstanceBufferComponent);
-
-pub type IndirectBufferComponent = BufferComponent<DrawIndexedIndirect>;
-legion_debugger::register_component!(IndirectBufferComponent);
-
-pub type UniformBufferComponent = BufferComponent<Uniforms>;
-legion_debugger::register_component!(UniformBufferComponent);
 
 pub type VertexBufferOffsets = BufferOffsetsComponent<Vec<Vertex>>;
 legion_debugger::register_component!(VertexBufferOffsets);
@@ -178,8 +171,6 @@ legion_debugger::register_component!(UniformsComponent);
     Clone, Copy, PartialEq, PartialOrd, Pod, Zeroable, serde::Serialize, serde::Deserialize,
 )]
 pub struct Instance {
-    _position: [f32; 4],
-    _orientation: [f32; 4],
     _visible: u32,
     _radius: f32,
     _pad: [u32; 2],
@@ -188,8 +179,6 @@ pub struct Instance {
 impl Default for Instance {
     fn default() -> Self {
         Instance {
-            _position: Default::default(),
-            _orientation: [0.0, 0.0, 0.0, 1.0],
             _visible: 1,
             _radius: 0.0,
             _pad: Default::default(),
@@ -213,22 +202,10 @@ impl Default for InstanceComponent {
 }
 
 impl InstanceComponent {
-    pub fn new(
-        position: cgmath::Vector3<f32>,
-        orientation: cgmath::Quaternion<f32>,
-        radius: f32,
-        visible: bool,
-    ) -> Self {
-        let pos: [f32; 3] = *position.as_ref();
-        let pos = [pos[0], pos[1], pos[2], 0.0];
-
-        let quat: [f32; 4] = *orientation.as_ref();
-
+    pub fn new(radius: f32, visible: bool) -> Self {
         let visible: u32 = if visible { 1 } else { 0 };
 
         InstanceComponent(OnChange::new_dirty(Instance {
-            _position: pos,
-            _orientation: quat,
             _visible: visible,
             _radius: radius,
             _pad: Default::default(),
@@ -346,7 +323,7 @@ impl CubeRenderer {
                         ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: wgpu::BufferSize::new(
-                            std::mem::size_of::<Instance>() as u64
+                            (4 * 8) + std::mem::size_of::<Instance>() as u64,
                         ),
                     },
                     count: None,
@@ -394,7 +371,7 @@ impl CubeRenderer {
             ],
         },
         VertexBufferLayout {
-            array_stride: std::mem::size_of::<Instance>() as BufferAddress,
+            array_stride: (4 * 8) + std::mem::size_of::<Instance>() as BufferAddress,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: &[
                 wgpu::VertexAttribute {
@@ -449,7 +426,7 @@ impl CubeRenderer {
 
         let instance_buffer = Arc::new(device.create_buffer(&BufferDescriptor {
             label: Some("Instance Buffer"),
-            size: std::mem::size_of::<Instance>() as BufferAddress
+            size: ((4 * 8) + std::mem::size_of::<Instance>() as BufferAddress)
                 * instance_count as BufferAddress,
             usage: wgpu::BufferUsages::VERTEX
                 | wgpu::BufferUsages::STORAGE
@@ -725,79 +702,6 @@ impl CubeRenderer {
         self.texture.clone()
     }
 
-    pub fn cube_vertices() -> (Vec<Vertex>, Vec<Index>) {
-        #[rustfmt::skip]
-        let vertex_data = [
-            // top (0, 0, 1)
-            vertex([-0.5, -0.5, 0.5], [0.0, 0.0, 1.0], [0.0, 0.0], 0),
-            vertex([0.5, -0.5, 0.5], [0.0, 0.0, 1.0], [1.0, 0.0], 0),
-            vertex([0.5, 0.5, 0.5], [0.0, 0.0, 1.0], [1.0, 1.0], 0),
-            vertex([-0.5, 0.5, 0.5], [0.0, 0.0, 1.0], [0.0, 1.0], 0),
-            // bottom (0, 0, -0.5)
-            vertex([-0.5, 0.5, -0.5], [0.0, 0.0, -1.0], [1.0, 0.0], 0),
-            vertex([0.5, 0.5, -0.5], [0.0, 0.0, -1.0], [0.0, 0.0], 0),
-            vertex([0.5, -0.5, -0.5], [0.0, 0.0, -1.0], [0.0, 1.0], 0),
-            vertex([-0.5, -0.5, -0.5], [0.0, 0.0, -1.0], [1.0, 1.0], 0),
-            // right (0.5, 0, 0)
-            vertex([0.5, -0.5, -0.5], [1.0, 0.0, 0.0], [0.0, 0.0], 0),
-            vertex([0.5, 0.5, -0.5], [1.0, 0.0, 0.0], [1.0, 0.0], 0),
-            vertex([0.5, 0.5, 0.5], [1.0, 0.0, 0.0], [1.0, 1.0], 0),
-            vertex([0.5, -0.5, 0.5], [1.0, 0.0, 0.0], [0.0, 1.0], 0),
-            // left (-0.5, 0, 0)
-            vertex([-0.5, -0.5, 0.5], [-1.0, 0.0, 0.0], [1.0, 0.0], 0),
-            vertex([-0.5, 0.5, 0.5], [-1.0, 0.0, 0.0], [0.0, 0.0], 0),
-            vertex([-0.5, 0.5, -0.5], [-1.0, 0.0, 0.0], [0.0, 1.0], 0),
-            vertex([-0.5, -0.5, -0.5], [-1.0, 0.0, 0.0], [1.0, 1.0], 0),
-            // front (0, 0.5, 0)
-            vertex([0.5, 0.5, -0.5], [0.0, 1.0, 0.0], [1.0, 0.0], 0),
-            vertex([-0.5, 0.5, -0.5], [0.0, 1.0, 0.0], [0.0, 0.0], 0),
-            vertex([-0.5, 0.5, 0.5], [0.0, 1.0, 0.0], [0.0, 1.0], 0),
-            vertex([0.5, 0.5, 0.5], [0.0, 1.0, 0.0], [1.0, 1.0], 0),
-            // back (0, -0.5, 0)
-            vertex([0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [0.0, 0.0], 0),
-            vertex([-0.5, -0.5, 0.5], [0.0, -1.0, 0.0], [1.0, 0.0], 0),
-            vertex([-0.5, -0.5, -0.5], [0.0, -1.0, 0.0], [1.0, 1.0], 0),
-            vertex([0.5, -0.5, -0.5], [0.0, -1.0, 0.0], [0.0, 1.0], 0),
-        ];
-
-        #[rustfmt::skip]
-        let index_data = [
-            0, 1, 2, 2, 3, 0, // top
-            4, 5, 6, 6, 7, 4, // bottom
-            8, 9, 10, 10, 11, 8, // right
-            12, 13, 14, 14, 15, 12, // left
-            16, 17, 18, 18, 19, 16, // front
-            20, 21, 22, 22, 23, 20, // back
-        ];
-
-        (vertex_data.to_vec(), index_data.to_vec())
-    }
-
-    pub fn tetrahedron_vertices() -> (Vec<Vertex>, Vec<Index>) {
-        let a = 1.0f32 / 3.0;
-        let b = (8.0f32 / 9.0).sqrt();
-        let c = (2.0f32 / 9.0).sqrt();
-        let d = (2.0f32 / 3.0).sqrt();
-
-        #[rustfmt::skip]
-        let vertex_data = [
-            vertex([0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [0.0, 0.0], 1),
-            vertex([-c, d, -a], [0.0, 1.0, 0.0], [1.0, 0.0], 1),
-            vertex([-c, -d, -a], [0.0, 1.0, 0.0], [1.0, 1.0], 1),
-            vertex([b, 0.0, a], [0.0, 1.0, 0.0], [0.0, 1.0], 1),
-        ];
-
-        #[rustfmt::skip]
-        let index_data = [
-            0, 1, 2,
-            0, 2, 3,
-            0, 3, 1,
-            3, 2, 1,
-        ];
-
-        (vertex_data.to_vec(), index_data.to_vec())
-    }
-
     fn create_texels(size: usize) -> Vec<u8> {
         (0..size * size)
             .map(|id| {
@@ -936,22 +840,24 @@ pub fn update_look(
 
 #[legion::system(par_for_each)]
 pub fn update_instances(
-    position: Option<&Position3d>,
-    orientation: Option<&antigen_cgmath::components::Orientation>,
+    //position: Option<&Position3d>,
+    //orientation: Option<&antigen_cgmath::components::Orientation>,
     visible: Option<&crate::components::Visible>,
     sphere_bounds: Option<&crate::components::SphereBounds>,
     instance: &mut InstanceComponent,
 ) {
     let mut inst = *instance.get();
 
+    /*
     if let Some(position) = position {
-        let pos: [f32; 3] = *(*position).as_ref();
+        let pos: [f32; 3] = *position.get().as_ref();
         inst._position = [pos[0], pos[1], pos[2], 0.0];
     }
 
     if let Some(orientation) = orientation {
         inst._orientation = *(*orientation).as_ref();
     }
+    */
 
     if let Some(visible) = visible {
         inst._visible = **visible as u32;
@@ -980,7 +886,7 @@ pub fn update_uniforms(
     }
 
     if let Some(orientation) = orientation {
-        let quat: [f32; 4] = *(orientation).as_ref();
+        let quat: [f32; 4] = *orientation.get().as_ref();
         u._orientation = quat;
     }
 
@@ -999,7 +905,7 @@ pub fn update_uniforms(
 #[read_component(MeshNormals<nalgebra::Vector3::<f32>>)]
 #[read_component(MeshUvs<nalgebra::Vector2::<f32>>)]
 #[read_component(VertexBufferEntity)]
-#[read_component(VertexBufferComponent)]
+#[read_component(BufferComponent)]
 #[write_component(VertexBufferOffsets)]
 #[write_component(Vertices)]
 pub fn collect_vertices(world: &mut SubWorld) {
@@ -1032,7 +938,7 @@ pub fn collect_vertices(world: &mut SubWorld) {
 
     let mut vertex_buffer_query = <(
         Entity,
-        &VertexBufferComponent,
+        &BufferComponent,
         &mut VertexBufferOffsets,
         &mut Vertices,
     )>::query();
@@ -1080,7 +986,7 @@ pub fn collect_vertices(world: &mut SubWorld) {
 #[read_component(MeshId)]
 #[read_component(MeshTriangleIndices<usize>)]
 #[read_component(IndexBufferEntity)]
-#[read_component(IndexBufferComponent)]
+#[read_component(BufferComponent)]
 #[write_component(IndexBufferOffsets)]
 #[write_component(Indices)]
 pub fn collect_indices(world: &mut SubWorld) {
@@ -1098,7 +1004,7 @@ pub fn collect_indices(world: &mut SubWorld) {
 
     let mut index_buffer_query = <(
         Entity,
-        &IndexBufferComponent,
+        &BufferComponent,
         &mut IndexBufferOffsets,
         &mut Indices,
     )>::query();
@@ -1139,15 +1045,24 @@ pub fn collect_indices(world: &mut SubWorld) {
 #[legion::system]
 #[read_component(InstanceComponent)]
 #[write_component(IndexedIndirectComponent)]
+#[write_component(BufferWritePosition)]
+#[write_component(BufferWriteOrientation)]
 #[write_component(BufferWriteInstances)]
 #[write_component(BufferWriteIndexedIndirect)]
 pub fn collect_instances_indirects(world: &mut SubWorld) {
     let mut query = <(
         &InstanceComponent,
         &mut IndexedIndirectComponent,
+        &mut BufferWritePosition,
+        &mut BufferWriteOrientation,
         &mut BufferWriteInstances,
         &mut BufferWriteIndexedIndirect,
     )>::query();
+
+    let position_size: wgpu::BufferAddress = 4 * 4;
+    let orientation_size: wgpu::BufferAddress = 4 * 4;
+    let instance_size = std::mem::size_of::<Instance>() as wgpu::BufferAddress;
+    let total_size = position_size + orientation_size + instance_size;
 
     let mut offset = 0 as wgpu::BufferAddress;
     query.for_each_mut(
@@ -1155,16 +1070,25 @@ pub fn collect_instances_indirects(world: &mut SubWorld) {
         |(
             _,
             IndexedIndirectComponent(indexed_indirect),
+            buffer_write_position,
+            buffer_write_orientation,
             buffer_write_instances,
             buffer_write_indirects,
         )| {
+            let total_offset = total_size * offset;
+
+            // Set instance write offsets
+            buffer_write_position.set_offset(total_offset);
+            buffer_write_orientation.set_offset(total_offset + position_size);
+            buffer_write_instances.set_offset(total_offset + position_size + orientation_size);
+
+            // Set indirect data
             let indirect = *indexed_indirect.get();
             indexed_indirect.set(DrawIndexedIndirect {
                 base_instance: offset as u32,
                 ..indirect
             });
-            buffer_write_instances
-                .set_offset(std::mem::size_of::<Instance>() as wgpu::BufferAddress * offset);
+
             buffer_write_indirects.set_offset(
                 std::mem::size_of::<DrawIndexedIndirect>() as wgpu::BufferAddress * offset,
             );

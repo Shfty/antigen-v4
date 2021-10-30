@@ -1,4 +1,4 @@
-use legion::{Entity, query::IntoQuery, systems::Builder, world::SubWorld};
+use legion::{query::IntoQuery, systems::Builder, world::SubWorld, Entity};
 pub use rapier3d;
 
 use antigen_cgmath::cgmath::InnerSpace;
@@ -180,6 +180,7 @@ pub fn create_rigid_bodies(
             <&mut RigidBodySet>::query().get_mut(world, rigid_body.physics_sim_entity)
         {
             if let Some(position) = position {
+                let position = position.get();
                 pending.set_translation(vector![position.x, position.y, position.z], true);
             }
 
@@ -267,13 +268,15 @@ pub fn rigid_body_readback(
                 RigidBodyType::Dynamic => {
                     if let Some(position) = position {
                         let pos = body.translation();
-                        **position = antigen_cgmath::cgmath::Vector3::new(pos.x, pos.y, pos.z);
+                        position
+                            .set_checked(antigen_cgmath::cgmath::Vector3::new(pos.x, pos.y, pos.z));
                     }
 
                     if let Some(orientation) = orientation {
                         let quat = body.rotation();
-                        **orientation =
-                            antigen_cgmath::cgmath::Quaternion::new(quat.w, quat.i, quat.j, quat.k);
+                        orientation.set_checked(antigen_cgmath::cgmath::Quaternion::new(
+                            quat.w, quat.i, quat.j, quat.k,
+                        ));
                     }
 
                     if let Some(velocity) = velocity {
@@ -290,13 +293,15 @@ pub fn rigid_body_readback(
                 RigidBodyType::KinematicVelocityBased => {
                     if let Some(position) = position {
                         let pos = body.translation();
-                        **position = antigen_cgmath::cgmath::Vector3::new(pos.x, pos.y, pos.z);
+                        position
+                            .set_checked(antigen_cgmath::cgmath::Vector3::new(pos.x, pos.y, pos.z));
                     }
 
                     if let Some(orientation) = orientation {
                         let quat = body.rotation();
-                        **orientation =
-                            antigen_cgmath::cgmath::Quaternion::new(quat.w, quat.i, quat.j, quat.k);
+                        orientation.set_checked(antigen_cgmath::cgmath::Quaternion::new(
+                            quat.w, quat.i, quat.j, quat.k,
+                        ));
                     }
                 }
                 _ => (),
@@ -320,6 +325,7 @@ pub fn rigid_body_kinematic_position(
             let body = &mut rigid_body_set[handle];
             if let RigidBodyType::KinematicPositionBased = body.body_type() {
                 if let Some(position) = position {
+                    let position = position.get();
                     body.set_next_kinematic_translation(vector![
                         position.x, position.y, position.z
                     ]);

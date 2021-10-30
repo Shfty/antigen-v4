@@ -26,7 +26,7 @@ use crate::{
     Shared, SharedState,
 };
 
-const DEBUGGER: bool = false;
+const DEBUGGER: bool = true;
 
 const GAME_TICK_HZ: f64 = 60.0;
 const GAME_TICK_SECS: f64 = 1.0 / GAME_TICK_HZ;
@@ -74,6 +74,14 @@ pub fn game_thread<'a>(
             .add_system(antigen_wgpu::systems::buffer_write_system::<
                 Indices,
                 Vec<Index>,
+            >())
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                antigen_cgmath::components::Position3d,
+                antigen_cgmath::cgmath::Vector3<f32>,
+            >())
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                antigen_cgmath::components::Orientation,
+                antigen_cgmath::cgmath::Quaternion<f32>,
             >())
             .add_system(antigen_wgpu::systems::buffer_write_system::<
                 InstanceComponent,

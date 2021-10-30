@@ -36,6 +36,27 @@ where
     }
 }
 
+impl CastSlice<u8> for antigen_cgmath::cgmath::Vector3<f32> {
+    fn cast_slice(&self) -> &[u8] {
+        let mx: &[f32; 3] = self.as_ref();
+        mx.cast_slice()
+    }
+}
+
+impl CastSlice<u8> for antigen_cgmath::cgmath::Vector4<f32> {
+    fn cast_slice(&self) -> &[u8] {
+        let mx: &[f32; 4] = self.as_ref();
+        mx.cast_slice()
+    }
+}
+
+impl CastSlice<u8> for antigen_cgmath::cgmath::Quaternion<f32> {
+    fn cast_slice(&self) -> &[u8] {
+        let mx: &[f32; 4] = self.as_ref();
+        mx.cast_slice()
+    }
+}
+
 impl CastSlice<u8> for antigen_cgmath::cgmath::Matrix4<f32> {
     fn cast_slice(&self) -> &[u8] {
         let mx: &[f32; 16] = self.as_ref();

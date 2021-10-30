@@ -81,7 +81,7 @@ pub fn register_render_passes(
 
 #[legion::system(par_for_each)]
 #[read_component(T)]
-#[read_component(BufferComponent<D>)]
+#[read_component(BufferComponent)]
 #[filter(legion::maybe_changed::<T>())]
 pub fn buffer_write<
     T: Component + OnChangeTrait<D> + Send + Sync + 'static,
@@ -95,7 +95,7 @@ pub fn buffer_write<
     let from = buffer_write.from_entity().unwrap_or(entity);
     if let Ok(value) = <&T>::query().get(world, *from) {
         let to = buffer_write.to_entity().unwrap_or(entity);
-        if let Ok(buffer) = <&BufferComponent<D>>::query().get(world, *to) {
+        if let Ok(buffer) = <&BufferComponent>::query().get(world, *to) {
             if let Some(value) = value.take_change() {
                 queue.write_buffer(buffer, buffer_write.offset(), value.cast_slice());
             }

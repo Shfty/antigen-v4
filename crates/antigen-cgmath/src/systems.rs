@@ -23,7 +23,7 @@ pub fn look_at_quat(
 ) {
     let look_to = (look_at - eye_position).normalize();
     let mat = cgmath::Matrix3::look_to_rh(look_to, *up_vector);
-    **orientation = mat.into();
+    orientation.set_checked(mat.into());
 }
 
 #[legion::system(par_for_each)]
@@ -44,7 +44,7 @@ pub fn look_to_quat(
     orientation: &mut Orientation,
 ) {
     let mat = cgmath::Matrix3::look_to_rh(*look_to, *up_vector);
-    **orientation = mat.into();
+    orientation.set_checked(mat.into());
 }
 
 #[legion::system(par_for_each)]

@@ -1,16 +1,17 @@
 use cgmath::{One, Quaternion};
+use on_change::{OnChange, OnChangeTrait};
 
-#[derive(Debug, Copy, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Orientation(Quaternion<f32>);
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct Orientation(OnChange<Quaternion<f32>>);
 
 impl Default for Orientation {
     fn default() -> Self {
-        Orientation(Quaternion::one())
+        Orientation(OnChange::new_dirty(Quaternion::one()))
     }
 }
 
 impl std::ops::Deref for Orientation {
-    type Target = Quaternion<f32>;
+    type Target = OnChange<Quaternion<f32>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -20,6 +21,12 @@ impl std::ops::Deref for Orientation {
 impl std::ops::DerefMut for Orientation {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
+    }
+}
+
+impl OnChangeTrait<Quaternion<f32>> for Orientation {
+    fn take_change(&self) -> Option<&Quaternion<f32>> {
+        self.0.take_change()
     }
 }
 

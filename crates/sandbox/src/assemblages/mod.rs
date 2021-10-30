@@ -19,25 +19,7 @@ use cgmath::{InnerSpace, One, Zero};
 use legion::{Entity, World};
 use wgpu::BufferAddress;
 
-use crate::renderers::{
-    boids::BoidsRenderer,
-    bunnymark::BunnymarkRenderer,
-    conservative_raster::ConservativeRasterRenderer,
-    cube::{
-        BufferWriteIndexedIndirect, BufferWriteIndices, BufferWriteInstances, BufferWriteVertices,
-        CubeRenderer, IndexBufferComponent, IndexBufferOffsets, IndirectBufferComponent,
-        IndirectBufferOffsets, InstanceBufferComponent, InstanceBufferOffsets,
-        UniformBufferComponent, Uniforms, UniformsComponent, VertexBufferComponent,
-        VertexBufferOffsets,
-    },
-    hello_triangle::TriangleRenderer,
-    mipmap::MipmapRenderer,
-    msaa_lines::MsaaLinesRenderer,
-    shadow::ShadowRenderer,
-    skybox::SkyboxRenderer,
-    texture_arrays::TextureArraysRenderer,
-    water::WaterRenderer,
-};
+use crate::renderers::{boids::BoidsRenderer, bunnymark::BunnymarkRenderer, conservative_raster::ConservativeRasterRenderer, cube::{BufferWriteIndexedIndirect, BufferWriteIndices, BufferWriteInstances, BufferWriteOrientation, BufferWritePosition, BufferWriteVertices, CubeRenderer, IndexBufferOffsets, IndirectBufferOffsets, InstanceBufferOffsets, Uniforms, UniformsComponent, VertexBufferOffsets}, hello_triangle::TriangleRenderer, mipmap::MipmapRenderer, msaa_lines::MsaaLinesRenderer, shadow::ShadowRenderer, skybox::SkyboxRenderer, texture_arrays::TextureArraysRenderer, water::WaterRenderer};
 
 type BufferWriteViewProjectionMatrix =
     BufferWrite<ViewProjectionMatrix, antigen_cgmath::cgmath::Matrix4<f32>>;
@@ -312,7 +294,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     );
 
     let uniform_buffer_component =
-        UniformBufferComponent::from(cube_renderer.take_uniform_buffer_handle());
+        BufferComponent::from(cube_renderer.take_uniform_buffer_handle());
 
     let vertex_buffer = cube_renderer.take_vertex_buffer_handle();
     let index_buffer = cube_renderer.take_index_buffer_handle();
@@ -408,7 +390,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
 
     let vertex_buffer_entity = world.push((
         Name::new("Vertex Buffer"),
-        VertexBufferComponent::from(vertex_buffer),
+        BufferComponent::from(vertex_buffer),
         VertexBufferOffsets::default(),
         crate::renderers::cube::Vertices::new(Default::default()),
         BufferWriteVertices::new(None, None, 0),
@@ -416,7 +398,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
 
     let index_buffer_entity = world.push((
         Name::new("Index Buffer"),
-        IndexBufferComponent::from(index_buffer),
+        BufferComponent::from(index_buffer),
         IndexBufferOffsets::default(),
         crate::renderers::cube::Indices::new(Default::default()),
         BufferWriteIndices::new(None, None, 0),
@@ -424,13 +406,13 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
 
     let instance_buffer_entity = world.push((
         Name::new("Instance Buffer"),
-        InstanceBufferComponent::from(instance_buffer),
+        BufferComponent::from(instance_buffer),
         InstanceBufferOffsets::default(),
     ));
 
     let indirect_buffer_entity = world.push((
         Name::new("Indirect Buffer"),
-        IndirectBufferComponent::from(indirect_buffer),
+        BufferComponent::from(indirect_buffer),
         IndirectBufferOffsets::default(),
     ));
 
@@ -563,6 +545,8 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
             crate::components::SphereBounds(1.0),
             // Instance data
             crate::renderers::cube::InstanceComponent::default(),
+            BufferWritePosition::new(None, Some(instance_buffer_entity), 0),
+            BufferWriteOrientation::new(None, Some(instance_buffer_entity), 0),
             BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
             // Indirect data
             crate::renderers::cube::IndexedIndirectComponent::new(tetrahedron_indirect),
@@ -603,6 +587,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
         world.push((
             Name::new(format!("Cube #{}", i)),
             antigen_cgmath::components::Position3d::new(offset * 3.0),
+            antigen_cgmath::components::Orientation::default(),
             crate::components::SphereBounds(1.0),
             antigen_rapier3d::RigidBodyComponent {
                 physics_sim_entity,
@@ -618,6 +603,8 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
             },
             antigen_cgmath::components::LinearVelocity3d(offset.clone().normalize() * 3.0),
             crate::renderers::cube::InstanceComponent::default(),
+            BufferWritePosition::new(None, Some(instance_buffer_entity), 0),
+            BufferWriteOrientation::new(None, Some(instance_buffer_entity), 0),
             BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
             crate::renderers::cube::IndexedIndirectComponent::new(cube_indirect),
             BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
@@ -630,8 +617,11 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     world.push((
         Name::new("Abstract Test"),
         antigen_cgmath::components::Position3d::new(cgmath::Vector3::new(0.0, -2.5, 0.0)),
+        antigen_cgmath::components::Orientation::default(),
         crate::components::SphereBounds(3.0),
         crate::renderers::cube::InstanceComponent::default(),
+        BufferWritePosition::new(None, Some(instance_buffer_entity), 0),
+        BufferWriteOrientation::new(None, Some(instance_buffer_entity), 0),
         BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
         crate::renderers::cube::IndexedIndirectComponent::new(abstract_test_indirect),
         BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
@@ -641,8 +631,11 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     world.push((
         Name::new("OBJ"),
         antigen_cgmath::components::Position3d::new(cgmath::Vector3::zero()),
+        antigen_cgmath::components::Orientation::default(),
         crate::components::SphereBounds(3.0),
         crate::renderers::cube::InstanceComponent::default(),
+        BufferWritePosition::new(None, Some(instance_buffer_entity), 0),
+        BufferWriteOrientation::new(None, Some(instance_buffer_entity), 0),
         BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
         crate::renderers::cube::IndexedIndirectComponent::new(obj_indirect),
         BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
