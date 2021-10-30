@@ -19,7 +19,7 @@ impl serde::Serialize for BufferComponent {
         S: serde::Serializer,
     {
         serializer
-            .serialize_struct("UniformBufferComponent", 0)?
+            .serialize_struct("BufferComponent", 0)?
             .end()
     }
 }
