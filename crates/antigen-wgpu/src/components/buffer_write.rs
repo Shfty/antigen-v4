@@ -34,4 +34,8 @@ impl<T: OnChangeTrait<D>, D: CastSlice<u8>> BufferWrite<T, D> {
     pub fn offset(&self) -> wgpu::BufferAddress {
         self.offset
     }
+
+    pub fn set_offset(&mut self, offset: wgpu::BufferAddress) {
+        self.offset = offset
+    }
 }
