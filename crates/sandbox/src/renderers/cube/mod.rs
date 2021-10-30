@@ -1,9 +1,15 @@
-use antigen_wgpu::{CastSlice, RenderPass, WgpuManager};
+use antigen_wgpu::{components::BufferWrite, CastSlice, RenderPass, WgpuManager};
 use bytemuck::{Pod, Zeroable};
 use cgmath::{One, Zero};
 use lazy::Lazy;
+use legion::{world::SubWorld, Entity, IntoQuery};
 use on_change::{OnChange, OnChangeTrait};
-use std::{borrow::Cow, sync::Arc};
+use rayon::iter::ParallelIterator;
+use std::{
+    borrow::Cow,
+    collections::BTreeMap,
+    sync::{atomic::Ordering, Arc},
+};
 use wgpu::{
     BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, BufferAddress,
     BufferDescriptor, ComputePipeline, Device, RenderPipeline, ShaderModuleDescriptor,
@@ -15,8 +21,27 @@ use antigen_resources::Timing;
 use antigen_cgmath::components::{EyePosition, LookAt, Position3d, ProjectionMatrix};
 use antigen_wgpu::DrawIndexedIndirect;
 
+use crate::assemblages::{MeshId, MeshNormals, MeshTriangleIndices, MeshUvs, MeshVertices};
+
+pub type BufferWriteVertices =
+    BufferWrite<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>;
+legion_debugger::register_component!(BufferWriteVertices);
+
+pub type BufferWriteIndices = BufferWrite<crate::renderers::cube::Indices, Vec<u16>>;
+legion_debugger::register_component!(BufferWriteIndices);
+
+pub type BufferWriteInstances =
+    BufferWrite<crate::renderers::cube::InstanceComponent, crate::renderers::cube::Instance>;
+legion_debugger::register_component!(BufferWriteInstances);
+
+pub type BufferWriteIndexedIndirect = BufferWrite<
+    crate::renderers::cube::IndexedIndirectComponent,
+    antigen_wgpu::DrawIndexedIndirect,
+>;
+legion_debugger::register_component!(BufferWriteIndexedIndirect);
+
 #[repr(C)]
-#[derive(Clone, Copy, Default, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
 pub struct Vertex {
     pub pos: [f32; 3],
     _pad_0: f32,
@@ -930,4 +955,147 @@ pub fn update_uniforms(
     }
 
     uniforms.set_checked(u)
+}
+
+/// Iterate over mesh entities, translate generic components into renderer vertices
+#[legion::system]
+#[read_component(MeshId)]
+#[read_component(MeshVertices<nalgebra::Vector3::<f32>>)]
+#[read_component(MeshNormals<nalgebra::Vector3::<f32>>)]
+#[read_component(MeshUvs<nalgebra::Vector2::<f32>>)]
+#[write_component(Vertices)]
+#[write_component(BufferWriteVertices)]
+pub fn collect_vertices(world: &mut SubWorld) {
+    let mut query = <(
+        &MeshId,
+        &MeshVertices<nalgebra::Vector3<f32>>,
+        &MeshNormals<nalgebra::Vector3<f32>>,
+        &MeshUvs<nalgebra::Vector2<f32>>,
+        &mut Vertices,
+    )>::query();
+
+    // Iterate through entities with mesh data and renderer vertices,
+    // collect into a sorted map of mesh id -> buffer length
+    let lengths = query
+        .par_iter_mut(world)
+        .map(
+            |(mesh_id, mesh_vertices, mesh_normals, mesh_uvs, Vertices(cube_vertices))| {
+                let mut verts = vec![];
+                for (vertex, (normal, uv)) in mesh_vertices
+                    .iter()
+                    .zip(mesh_normals.iter().zip(mesh_uvs.iter()))
+                {
+                    verts.push(Vertex {
+                        pos: [vertex.x, vertex.y, vertex.z],
+                        _pad_0: 1.0,
+                        normal: [normal.x, normal.y, normal.z],
+                        _pad_1: 0.0,
+                        tex_coord: [uv.x, uv.y],
+                        texture: 0,
+                    });
+                }
+
+                cube_vertices.set(verts);
+                (*mesh_id, mesh_vertices.len())
+            },
+        )
+        .collect::<BTreeMap<_, _>>();
+
+    // Calculate offsets from buffer lengths
+    let mut offset = 0;
+    let offsets = lengths
+        .into_iter()
+        .map(|(mesh_id, len)| {
+            let prev_offset = offset;
+            offset += len * std::mem::size_of::<Vertex>();
+            (mesh_id, prev_offset)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    // Write offsets to buffer write components
+    let mut query = <(&MeshId, &mut Vertices, &mut BufferWriteVertices)>::query();
+    query.par_for_each_mut(world, |(mesh_id, _, buffer_write)| {
+        buffer_write.set_offset(offsets[mesh_id] as u64);
+    });
+}
+
+/// Iterate over mesh entities, translate generic components into renderer indices
+#[legion::system]
+#[read_component(MeshId)]
+#[read_component(MeshTriangleIndices<usize>)]
+#[write_component(Indices)]
+#[write_component(BufferWriteIndices)]
+pub fn collect_indices(world: &mut SubWorld) {
+    let mut query = <(&MeshId, &MeshTriangleIndices<usize>, &mut Indices)>::query();
+
+    // Iterate through entities with mesh data and renderer indices,
+    // collect into a sorted map of mesh id -> buffer length
+    let lengths = query
+        .par_iter_mut(world)
+        .map(|(mesh_id, mesh_indices, Indices(cube_indices))| {
+            let mut inds = vec![];
+            for index in mesh_indices.iter()
+            {
+                inds.push(*index as u16);
+            }
+
+            cube_indices.set(inds);
+            (*mesh_id, mesh_indices.len())
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    // Calculate offsets from buffer lengths
+    let mut offset = 0;
+    let offsets = lengths
+        .into_iter()
+        .map(|(mesh_id, len)| {
+            let prev_offset = offset;
+            offset += len * std::mem::size_of::<Index>();
+            (mesh_id, prev_offset)
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    // Write offsets to buffer write components
+    let mut query = <(&MeshId, &mut Indices, &mut BufferWriteIndices)>::query();
+    query.par_for_each_mut(world, |(mesh_id, _, buffer_write)| {
+        buffer_write.set_offset(offsets[mesh_id] as u64);
+    });
+}
+
+/// Iterate over mesh entities, translate generic components into instance and indirect data
+#[legion::system]
+#[read_component(InstanceComponent)]
+#[write_component(IndexedIndirectComponent)]
+#[write_component(BufferWriteInstances)]
+#[write_component(BufferWriteIndexedIndirect)]
+pub fn collect_instances_indirects(world: &mut SubWorld) {
+    let mut query = <(
+        &InstanceComponent,
+        &mut IndexedIndirectComponent,
+        &mut BufferWriteInstances,
+        &mut BufferWriteIndexedIndirect,
+    )>::query();
+
+    let mut offset = 0 as wgpu::BufferAddress;
+    query.for_each_mut(
+        world,
+        |(
+            _,
+            IndexedIndirectComponent(indexed_indirect),
+            buffer_write_instances,
+            buffer_write_indirects,
+        )| {
+            let indirect = *indexed_indirect.get();
+            indexed_indirect.set(DrawIndexedIndirect {
+                base_instance: offset as u32,
+                ..indirect
+            });
+            buffer_write_instances
+                .set_offset(std::mem::size_of::<Instance>() as wgpu::BufferAddress * offset);
+            buffer_write_indirects.set_offset(
+                std::mem::size_of::<DrawIndexedIndirect>() as wgpu::BufferAddress * offset,
+            );
+            offset += 1;
+        },
+    );
 }

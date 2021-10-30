@@ -26,7 +26,7 @@ use crate::{
     Shared, SharedState,
 };
 
-const DEBUGGER: bool = false;
+const DEBUGGER: bool = true;
 
 const GAME_TICK_HZ: f64 = 60.0;
 const GAME_TICK_SECS: f64 = 1.0 / GAME_TICK_HZ;
@@ -60,6 +60,9 @@ pub fn game_thread<'a>(
             .add_system(antigen_cgmath::systems::look_at_quat_system())
             .add_system(antigen_cgmath::systems::perspective_projection_system())
             .flush()
+            .add_system(crate::renderers::cube::collect_vertices_system())
+            .add_system(crate::renderers::cube::collect_indices_system())
+            .add_system(crate::renderers::cube::collect_instances_indirects_system())
             .add_system(crate::renderers::cube::update_uniforms_system())
             .add_system(crate::renderers::cube::update_instances_system())
             .add_system(antigen_wgpu::systems::buffer_write_system::<

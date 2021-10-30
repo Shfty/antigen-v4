@@ -4,7 +4,7 @@ use antigen_cgmath::components::{
     AspectRatio, EyePosition, FarPlane, FieldOfView, LookAt, NearPlane, PerspectiveProjection,
     ProjectionMatrix, UpVector, ViewProjectionMatrix,
 };
-use antigen_components::{Image, ImageComponent};
+use antigen_components::{Image, ImageComponent, Name};
 use antigen_rapier3d::rapier3d::prelude::*;
 use antigen_wgpu::{
     components::{
@@ -23,7 +23,10 @@ use crate::renderers::{
     boids::BoidsRenderer,
     bunnymark::BunnymarkRenderer,
     conservative_raster::ConservativeRasterRenderer,
-    cube::{CubeRenderer, Uniforms, UniformsComponent},
+    cube::{
+        BufferWriteIndexedIndirect, BufferWriteIndices, BufferWriteInstances, BufferWriteVertices,
+        CubeRenderer, Uniforms, UniformsComponent,
+    },
     hello_triangle::TriangleRenderer,
     mipmap::MipmapRenderer,
     msaa_lines::MsaaLinesRenderer,
@@ -36,24 +39,93 @@ use crate::renderers::{
 type BufferWriteViewProjectionMatrix =
     BufferWrite<ViewProjectionMatrix, antigen_cgmath::cgmath::Matrix4<f32>>;
 type BufferWriteUniforms = BufferWrite<UniformsComponent, Uniforms>;
-type BufferWriteVertices =
-    BufferWrite<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>;
-type BufferWriteIndices = BufferWrite<crate::renderers::cube::Indices, Vec<u16>>;
-type BufferWriteInstances =
-    BufferWrite<crate::renderers::cube::InstanceComponent, crate::renderers::cube::Instance>;
-type BufferWriteIndexedIndirect = BufferWrite<
-    crate::renderers::cube::IndexedIndirectComponent,
-    antigen_wgpu::DrawIndexedIndirect,
->;
 type TextureWriteImage = TextureWrite<ImageComponent, Image>;
 
-legion_debugger::register_component!(BufferWriteVertices);
-legion_debugger::register_component!(BufferWriteIndices);
-legion_debugger::register_component!(BufferWriteInstances);
 legion_debugger::register_component!(BufferWriteViewProjectionMatrix);
 legion_debugger::register_component!(BufferWriteUniforms);
-legion_debugger::register_component!(BufferWriteIndexedIndirect);
 legion_debugger::register_component!(TextureWriteImage);
+
+static MESH_ID_HEAD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[derive(
+    Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+pub struct MeshId(usize);
+
+impl MeshId {
+    pub fn next() -> Self {
+        MeshId(MESH_ID_HEAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+    }
+}
+
+legion_debugger::register_component!(MeshId);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MeshVertices<T>(pub Vec<T>);
+
+type MeshVerticesVector3 = MeshVertices<nalgebra::Vector3<f32>>;
+
+impl<T> std::ops::Deref for MeshVertices<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+legion_debugger::register_component!(MeshVerticesVector3);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MeshNormals<T>(pub Vec<T>);
+
+impl<T> std::ops::Deref for MeshNormals<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+type MeshNormalsVector3 = MeshNormals<nalgebra::Vector3<f32>>;
+
+legion_debugger::register_component!(MeshNormalsVector3);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MeshUvs<T>(pub Vec<T>);
+
+impl<T> std::ops::Deref for MeshUvs<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+type MeshUvsVector2 = MeshUvs<nalgebra::Vector2<f32>>;
+
+legion_debugger::register_component!(MeshUvsVector2);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MeshTriangleIndices<T>(pub Vec<T>);
+
+impl<T> std::ops::Deref for MeshTriangleIndices<T> {
+    type Target = Vec<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+type MeshTriangleIndicesUsize = MeshTriangleIndices<usize>;
+
+legion_debugger::register_component!(MeshTriangleIndicesUsize);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MeshLineIndices<T>(pub Vec<T>);
+
+type MeshLineIndicesUsize = MeshLineIndices<usize>;
+
+legion_debugger::register_component!(MeshLineIndicesUsize);
 
 pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) -> Entity {
     let triangle_pass_id =
@@ -70,25 +142,35 @@ pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) ->
     ))
 }
 
-pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
-    let (tetrahedron_vertices, tetrahedron_indices) = CubeRenderer::tetrahedron_vertices();
-    let (cube_vertices, cube_indices) = CubeRenderer::cube_vertices();
+/// The list of element offsets into a given buffer
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+struct BufferOffsetsComponent(pub Vec<usize>);
 
+legion_debugger::register_component!(BufferOffsetsComponent);
+
+/// The target vertex buffer to store mesh data into
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct VertexBufferEntity(pub Entity);
+
+legion_debugger::register_component!(VertexBufferEntity);
+
+/// The target index buffer to store mesh indices into
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct IndexBufferEntity(pub Entity);
+
+legion_debugger::register_component!(IndexBufferEntity);
+
+pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     let tetrahedron_count = 16u32;
     let cube_count = 16u32;
 
-    let tetrahedron_vertices_len = tetrahedron_vertices.len();
-    let tetrahedron_indices_len = tetrahedron_indices.len();
-
-    let cube_vertices_len = cube_vertices.len();
-    let cube_indices_len = cube_indices.len();
-
     // Load obj
-    //let source = include_bytes!("../renderers/skybox/models/marauder.obj");
-    //let data = obj::ObjData::load_buf(&source[..]).unwrap();
+    let source = include_bytes!("../renderers/skybox/models/marauder.obj");
+    let data = obj::ObjData::load_buf(&source[..]).unwrap();
 
-    /*
     let mut obj_vertices = Vec::new();
+    let mut obj_normals = Vec::new();
+    let mut obj_uvs = Vec::new();
     let mut obj_indices = Vec::new();
 
     for object in data.objects {
@@ -96,76 +178,102 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
             for poly in group.polys {
                 for end_index in 2..poly.0.len() {
                     for &index in &[0, end_index - 1, end_index] {
-                        let obj::IndexTuple(position_id, texture_id, _) = poly.0[index];
+                        let obj::IndexTuple(position_id, texture_id, normal_id) = poly.0[index];
 
-                        let mut pos = data.position[position_id];
-                        pos[0] *= 0.025;
-                        pos[1] *= 0.025;
-                        pos[2] *= 0.025;
+                        let pos = data.position[position_id];
+                        obj_vertices.push(nalgebra::vector![
+                            pos[0] / 40.0,
+                            pos[1] / 40.0,
+                            pos[2] / 40.0
+                        ]);
 
-                        obj_vertices.push(crate::renderers::cube::vertex(
-                            pos,
-                            data.texture[texture_id.unwrap()],
-                            0,
-                        ));
+                        let normal = data.normal[normal_id.unwrap()];
+                        obj_normals.push(nalgebra::vector![normal[0], normal[1], normal[2]]);
 
-                        obj_indices.push(obj_indices.len() as u16);
+                        let uv = data.texture[texture_id.unwrap()];
+                        obj_uvs.push(nalgebra::vector![uv[0], uv[1]]);
+
+                        obj_indices.push(obj_indices.len());
                     }
                 }
             }
         }
     }
-    */
-
-    // Parse map
-    let map = include_str!("../../../../../sif/crates/shalrath/test_data/abstract-test.map");
-    let map = map.parse::<shambler::shalrath::repr::Map>().unwrap();
-
-    // Build mesh
-    let shambler::Mesh {
-        vertices,
-        normals,
-        uvs,
-        triangle_indices,
-        ..
-    } = shambler::map_mesh(map);
-
-    let mut obj_vertices = vertices
-        .into_iter()
-        .zip(normals.into_iter().zip(uvs.into_iter()))
-        .map(|(vertex, (normal, uv))| {
-            crate::renderers::cube::vertex(
-                [vertex.x / 64.0, vertex.z / 64.0, vertex.y / 64.0],
-                [normal.x, normal.z, normal.y],
-                [uv.x, uv.y],
-                0,
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let mut obj_indices = triangle_indices
-        .into_iter()
-        .map(|i| i as u16)
-        .collect::<Vec<_>>();
 
     obj_vertices.resize(
         obj_vertices.len() + (obj_vertices.len() % wgpu::COPY_BUFFER_ALIGNMENT as usize),
         Default::default(),
     );
+
     obj_indices.resize(
         obj_indices.len() + (obj_indices.len() % wgpu::COPY_BUFFER_ALIGNMENT as usize),
         Default::default(),
     );
 
+    let cube_map = include_str!("../../../../../sif/crates/shalrath/test_data/cube.map");
+    let cube_map = cube_map.parse::<shambler::shalrath::repr::Map>().unwrap();
+
+    let shambler::Mesh {
+        vertices: cube_vertices,
+        normals: cube_normals,
+        uvs: cube_uvs,
+        triangle_indices: cube_triangle_indices,
+        ..
+    } = shambler::map_mesh(cube_map);
+
+    let tetrahedron_map =
+        include_str!("../../../../../sif/crates/shalrath/test_data/tetrahedron.map");
+    let tetrahedron_map = tetrahedron_map
+        .parse::<shambler::shalrath::repr::Map>()
+        .unwrap();
+
+    let shambler::Mesh {
+        vertices: tetrahedron_vertices,
+        normals: tetrahedron_normals,
+        uvs: tetrahedron_uvs,
+        triangle_indices: tetrahedron_triangle_indices,
+        ..
+    } = shambler::map_mesh(tetrahedron_map);
+
+    let abstract_test_map =
+        include_str!("../../../../../sif/crates/shalrath/test_data/abstract-test.map");
+    let abstract_test_map = abstract_test_map
+        .parse::<shambler::shalrath::repr::Map>()
+        .unwrap();
+
+    let shambler::Mesh {
+        vertices: abstract_test_vertices,
+        normals: abstract_test_normals,
+        uvs: abstract_test_uvs,
+        triangle_indices: abstract_test_triangle_indices,
+        ..
+    } = shambler::map_mesh(abstract_test_map);
+
+    let tetrahedron_vertices_len = tetrahedron_vertices.len();
+    let tetrahedron_indices_len = tetrahedron_triangle_indices.len();
+
+    let cube_vertices_len = cube_vertices.len();
+    let cube_indices_len = cube_triangle_indices.len();
+
+    let abstract_test_vertices_len = abstract_test_vertices.len();
+    let abstract_test_indices_len = abstract_test_triangle_indices.len();
+
     let obj_vertices_len = obj_vertices.len();
     let obj_indices_len = obj_indices.len();
 
-    let vertex_count = tetrahedron_vertices_len + cube_vertices_len + obj_vertices_len;
-    let index_count = tetrahedron_indices_len + cube_indices_len + obj_indices_len;
-    let instance_count = tetrahedron_count + cube_count + 1;
+    let vertex_count = tetrahedron_vertices_len
+        + cube_vertices_len
+        + abstract_test_vertices_len
+        + obj_vertices_len;
+
+    let index_count =
+        tetrahedron_indices_len + cube_indices_len + abstract_test_indices_len + obj_indices_len;
+
+    let instance_count = tetrahedron_count + cube_count + 1 + 1;
 
     // Physics simulation
     let physics_sim_entity = world.push((
+        Name::new("Physics Simulation"),
         antigen_rapier3d::Gravity(antigen_rapier3d::rapier3d::prelude::vector![
             0.0, -9.81, 0.0
         ]),
@@ -193,17 +301,19 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     let uniform_buffer_component =
         BufferComponent::from(cube_renderer.take_uniform_buffer_handle());
 
-    let vertex_buffer_component = BufferComponent::from(cube_renderer.take_vertex_buffer_handle());
-    let index_buffer_component = BufferComponent::from(cube_renderer.take_index_buffer_handle());
-    let instance_buffer_component =
-        BufferComponent::from(cube_renderer.take_instance_buffer_handle());
-    let indirect_buffer_component =
-        BufferComponent::from(cube_renderer.take_indirect_buffer_handle());
+    let vertex_buffer = cube_renderer.take_vertex_buffer_handle();
+    let index_buffer = cube_renderer.take_index_buffer_handle();
+    let instance_buffer = cube_renderer.take_instance_buffer_handle();
+    let indirect_buffer = cube_renderer.take_indirect_buffer_handle();
 
     // Texture array
-    let texture_entity = world.push((TextureComponent::from(cube_renderer.take_texture_handle()),));
+    let texture_entity = world.push((
+        Name::new("Texture Array"),
+        TextureComponent::from(cube_renderer.take_texture_handle()),
+    ));
 
     let mandelbrot_texture_entity = world.push((
+        Name::new("Mandelbrot Texture"),
         ImageComponent::from(Image::mandelbrot_r8(256)),
         TextureWriteImage::new(
             None,
@@ -228,6 +338,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     ));
 
     let inverse_mandelbrot_texture_entity = world.push((
+        Name::new("Inverse Mandelbrot Texture"),
         ImageComponent::from(Image::mandelbrot_r8(256).inverse()),
         TextureWriteImage::new(
             None,
@@ -261,6 +372,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     cube_pass_component.add_render_pass(cube_pass_id);
 
     let cube_renderer_entity = world.push((
+        Name::new("Cube Renderer"),
         WindowComponent::default(),
         WindowTitle::from("Cube"),
         RedrawModeComponent::from(RedrawMode::MainEventsClearedLoop),
@@ -281,63 +393,28 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
         BufferWriteUniforms::new(None, None, 0),
     ));
 
-    let vertex_buffer_entity = world.push((vertex_buffer_component,));
-    let index_buffer_entity = world.push((index_buffer_component,));
-    let instance_buffer_entity = world.push((instance_buffer_component,));
-    let indirect_buffer_entity = world.push((indirect_buffer_component,));
-
-    // Tetrahedron mesh
-    let tetrahedron_vertices_entity = world.push((
-        crate::renderers::cube::Vertices::new(tetrahedron_vertices),
-        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
+    let vertex_buffer_entity = world.push((
+        Name::new("Vertex Buffer"),
+        BufferComponent(vertex_buffer),
+        BufferOffsetsComponent::default(),
     ));
 
-    let tetrahedron_indices_entity = world.push((
-        crate::renderers::cube::Indices::new(tetrahedron_indices),
-        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
+    let index_buffer_entity = world.push((
+        Name::new("Index Buffer"),
+        BufferComponent(index_buffer),
+        BufferOffsetsComponent::default(),
     ));
 
-    // Cube mesh
-    let cube_vertices_entity = world.push((
-        crate::renderers::cube::Vertices::new(cube_vertices),
-        BufferWriteVertices::new(
-            None,
-            Some(vertex_buffer_entity),
-            (std::mem::size_of::<crate::renderers::cube::Vertex>() * tetrahedron_vertices_len)
-                as wgpu::BufferAddress,
-        ),
+    let instance_buffer_entity = world.push((
+        Name::new("Instance Buffer"),
+        BufferComponent(instance_buffer),
+        BufferOffsetsComponent::default(),
     ));
 
-    let cube_indices_entity = world.push((
-        crate::renderers::cube::Indices::new(cube_indices),
-        BufferWriteIndices::new(
-            None,
-            Some(index_buffer_entity),
-            (std::mem::size_of::<crate::renderers::cube::Index>() * tetrahedron_indices_len)
-                as wgpu::BufferAddress,
-        ),
-    ));
-
-    // OBJ mesh
-    let obj_vertices_entity = world.push((
-        crate::renderers::cube::Vertices::new(obj_vertices),
-        BufferWriteVertices::new(
-            None,
-            Some(vertex_buffer_entity),
-            (std::mem::size_of::<crate::renderers::cube::Vertex>()
-                * (tetrahedron_vertices_len + cube_vertices_len))
-                as wgpu::BufferAddress,
-        ),
-    ));
-
-    let obj_indices_entity = world.push((
-        crate::renderers::cube::Indices::new(obj_indices),
-        BufferWriteIndices::new(
-            None,
-            Some(index_buffer_entity),
-            (std::mem::size_of::<crate::renderers::cube::Index>()
-                * (tetrahedron_indices_len + cube_indices_len)) as wgpu::BufferAddress,
-        ),
+    let indirect_buffer_entity = world.push((
+        Name::new("Indirect Buffer"),
+        BufferComponent(indirect_buffer),
+        BufferOffsetsComponent::default(),
     ));
 
     // Indirect draw data
@@ -357,32 +434,149 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
         base_instance: 0,
     };
 
-    let obj_indirect = antigen_wgpu::DrawIndexedIndirect {
-        vertex_count: obj_indices_len as u32,
+    let abstract_test_indirect = antigen_wgpu::DrawIndexedIndirect {
+        vertex_count: abstract_test_indices_len as u32,
         instance_count: 1,
         base_index: (tetrahedron_indices_len + cube_indices_len) as u32,
         vertex_offset: (tetrahedron_vertices_len + cube_vertices_len) as i32,
         base_instance: 0,
     };
 
+    let obj_indirect = antigen_wgpu::DrawIndexedIndirect {
+        vertex_count: obj_indices_len as u32,
+        instance_count: 1,
+        base_index: (tetrahedron_indices_len + cube_indices_len + abstract_test_indices_len) as u32,
+        vertex_offset: (tetrahedron_vertices_len + cube_vertices_len + abstract_test_vertices_len)
+            as i32,
+        base_instance: 0,
+    };
+
+    // Tetrahedron mesh
+    let tetrahedron_mesh_id = MeshId::next();
+
+    let tetrahedron_vertices_entity = world.push((
+        Name::new("Tetrahedron Vertices"),
+        tetrahedron_mesh_id,
+        MeshVertices(tetrahedron_vertices.clone()),
+        MeshNormals(tetrahedron_normals.clone()),
+        MeshUvs(tetrahedron_uvs.clone()),
+        VertexBufferEntity(vertex_buffer_entity),
+        crate::renderers::cube::Vertices::new(Default::default()),
+        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
+    ));
+
+    let tetrahedron_indices_entity = world.push((
+        Name::new("Tetrahedron Indices"),
+        tetrahedron_mesh_id,
+        MeshTriangleIndices(tetrahedron_triangle_indices.clone()),
+        IndexBufferEntity(index_buffer_entity),
+        crate::renderers::cube::Indices::new(Default::default()),
+        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
+    ));
+
+    // Cube mesh
+    let cube_mesh_id = MeshId::next();
+
+    let cube_vertices_entity = world.push((
+        Name::new("Cube Vertices"),
+        cube_mesh_id,
+        MeshVertices(cube_vertices.clone()),
+        MeshNormals(cube_normals.clone()),
+        MeshUvs(cube_uvs.clone()),
+        VertexBufferEntity(vertex_buffer_entity),
+        crate::renderers::cube::Vertices::new(Default::default()),
+        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
+    ));
+
+    let cube_indices_entity = world.push((
+        Name::new("Cube Indices"),
+        cube_mesh_id,
+        MeshTriangleIndices(cube_triangle_indices.clone()),
+        IndexBufferEntity(index_buffer_entity),
+        crate::renderers::cube::Indices::new(Default::default()),
+        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
+    ));
+
+    // Abstract test mesh
+    let abstract_test_mesh_id = MeshId::next();
+
+    let abstract_test_vertices_entity = world.push((
+        Name::new("Abstract Test Vertices"),
+        abstract_test_mesh_id,
+        MeshVertices(abstract_test_vertices.clone()),
+        MeshNormals(abstract_test_normals.clone()),
+        MeshUvs(abstract_test_uvs.clone()),
+        VertexBufferEntity(vertex_buffer_entity),
+        crate::renderers::cube::Vertices::new(Default::default()),
+        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
+    ));
+
+    let abstract_test_indices_entity = world.push((
+        Name::new("Abstract Test Indices"),
+        abstract_test_mesh_id,
+        MeshTriangleIndices(abstract_test_triangle_indices.clone()),
+        IndexBufferEntity(index_buffer_entity),
+        crate::renderers::cube::Indices::new(Default::default()),
+        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
+    ));
+
+    // OBJ mesh
+    let obj_mesh_id = MeshId::next();
+
+    let obj_vertices_entity = world.push((
+        Name::new("OBJ Vertices"),
+        obj_mesh_id,
+        MeshVertices(obj_vertices.clone()),
+        MeshNormals(obj_normals.clone()),
+        MeshUvs(obj_uvs.clone()),
+        VertexBufferEntity(vertex_buffer_entity),
+        crate::renderers::cube::Vertices::new(Default::default()),
+        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
+    ));
+
+    let obj_indices_entity = world.push((
+        Name::new("OBJ Indices"),
+        obj_mesh_id,
+        MeshTriangleIndices(obj_indices.clone()),
+        IndexBufferEntity(index_buffer_entity),
+        crate::renderers::cube::Indices::new(Default::default()),
+        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
+    ));
+
     // Floor entity
-    let floor_entity = world.push((antigen_rapier3d::ColliderComponent {
-        physics_sim_entity,
-        parent_entity: None,
-        pending_collider: Some(
-            ColliderBuilder::cuboid(100.0, 0.1, 100.0)
-                .translation(antigen_rapier3d::rapier3d::prelude::vector![0.0, -5.0, 0.0])
-                .build(),
-        ),
-        parent_handle: None,
-        handle: None,
-    },));
+    let floor_entity = world.push((
+        Name::new("Floor Collision"),
+        antigen_rapier3d::ColliderComponent {
+            physics_sim_entity,
+            parent_entity: None,
+            pending_collider: Some(
+                ColliderBuilder::cuboid(100.0, 0.1, 100.0)
+                    .translation(antigen_rapier3d::rapier3d::prelude::vector![0.0, -5.0, 0.0])
+                    .build(),
+            ),
+            parent_handle: None,
+            handle: None,
+        },
+    ));
 
     // Tetrahedron entities
     let mut dir = cgmath::Vector4::unit_z();
+
+    let tetrahedron_collider = ColliderBuilder::convex_hull(
+        &tetrahedron_vertices
+            .iter()
+            .copied()
+            .map(|v| nalgebra::Point3::new(v.x, v.y, v.z))
+            .collect::<Vec<_>>()[..],
+    )
+    .unwrap()
+    .restitution(0.7)
+    .build();
+
     for i in 0..tetrahedron_count {
         let offset: cgmath::Vector3<f32> = dir.xyz();
-        let entity = world.push((
+        world.push((
+            Name::new(format!("Tetrahedron #{}", i)),
             antigen_cgmath::components::Position3d::new(offset * 3.0),
             antigen_cgmath::components::Orientation::default(),
             antigen_rapier3d::RigidBodyComponent {
@@ -393,40 +587,37 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
             antigen_rapier3d::ColliderComponent {
                 physics_sim_entity,
                 parent_entity: None,
-                pending_collider: Some(ColliderBuilder::ball(0.5).restitution(0.7).build()),
+                pending_collider: Some(tetrahedron_collider.clone()),
                 parent_handle: None,
                 handle: None,
             },
             crate::components::SphereBounds(1.0),
             crate::renderers::cube::InstanceComponent::default(),
-            BufferWriteInstances::new(
-                None,
-                Some(instance_buffer_entity),
-                std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
-                    * i as wgpu::BufferAddress,
-            ),
-            crate::renderers::cube::IndexedIndirectComponent::new(
-                antigen_wgpu::DrawIndexedIndirect {
-                    base_instance: i,
-                    ..tetrahedron_indirect
-                },
-            ),
-            BufferWriteIndexedIndirect::new(
-                None,
-                Some(indirect_buffer_entity),
-                std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>() as wgpu::BufferAddress
-                    * i as wgpu::BufferAddress,
-            ),
+            BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
+            crate::renderers::cube::IndexedIndirectComponent::new(tetrahedron_indirect),
+            BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
         ));
 
         dir = cgmath::Matrix4::from_angle_x(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
     }
 
     // Cube entities
+    let cube_collider = ColliderBuilder::convex_hull(
+        &cube_vertices
+            .iter()
+            .copied()
+            .map(|v| nalgebra::Point3::new(v.x, v.y, v.z))
+            .collect::<Vec<_>>()[..],
+    )
+    .unwrap()
+    .restitution(0.7)
+    .build();
+
     let mut dir = cgmath::Vector4::unit_z();
     for i in 0..cube_count {
         let offset: cgmath::Vector3<f32> = dir.xyz();
         world.push((
+            Name::new(format!("Cube #{}", i)),
             antigen_cgmath::components::Position3d::new(offset * 3.0),
             crate::components::SphereBounds(1.0),
             antigen_rapier3d::RigidBodyComponent {
@@ -437,60 +628,40 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
             antigen_rapier3d::ColliderComponent {
                 physics_sim_entity,
                 parent_entity: None,
-                pending_collider: Some(
-                    ColliderBuilder::cuboid(0.5, 0.5, 0.5)
-                        .restitution(0.7)
-                        .build(),
-                ),
+                pending_collider: Some(cube_collider.clone()),
                 parent_handle: None,
                 handle: None,
             },
             antigen_cgmath::components::LinearVelocity3d(offset.clone().normalize() * 3.0),
             crate::renderers::cube::InstanceComponent::default(),
-            BufferWriteInstances::new(
-                None,
-                Some(instance_buffer_entity),
-                std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
-                    * (i + tetrahedron_count) as wgpu::BufferAddress,
-            ),
-            crate::renderers::cube::IndexedIndirectComponent::new(
-                antigen_wgpu::DrawIndexedIndirect {
-                    base_instance: i + tetrahedron_count,
-                    ..cube_indirect
-                },
-            ),
-            BufferWriteIndexedIndirect::new(
-                None,
-                Some(indirect_buffer_entity),
-                std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>() as wgpu::BufferAddress
-                    * (i + tetrahedron_count) as wgpu::BufferAddress,
-            ),
+            BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
+            crate::renderers::cube::IndexedIndirectComponent::new(cube_indirect),
+            BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
         ));
 
         dir = cgmath::Matrix4::from_angle_y(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
     }
 
+    // Abstract test entity
+    world.push((
+        Name::new("Abstract Test"),
+        antigen_cgmath::components::Position3d::new(cgmath::Vector3::new(0.0, -2.5, 0.0)),
+        crate::components::SphereBounds(3.0),
+        crate::renderers::cube::InstanceComponent::default(),
+        BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
+        crate::renderers::cube::IndexedIndirectComponent::new(abstract_test_indirect),
+        BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
+    ));
+
     // OBJ entity
     world.push((
+        Name::new("OBJ"),
         antigen_cgmath::components::Position3d::new(cgmath::Vector3::zero()),
         crate::components::SphereBounds(3.0),
         crate::renderers::cube::InstanceComponent::default(),
-        BufferWriteInstances::new(
-            None,
-            Some(instance_buffer_entity),
-            std::mem::size_of::<crate::renderers::cube::Instance>() as wgpu::BufferAddress
-                * (tetrahedron_count + cube_count) as wgpu::BufferAddress,
-        ),
-        crate::renderers::cube::IndexedIndirectComponent::new(antigen_wgpu::DrawIndexedIndirect {
-            base_instance: tetrahedron_count + cube_count,
-            ..obj_indirect
-        }),
-        BufferWriteIndexedIndirect::new(
-            None,
-            Some(indirect_buffer_entity),
-            std::mem::size_of::<antigen_wgpu::DrawIndexedIndirect>() as wgpu::BufferAddress
-                * (tetrahedron_count + cube_count) as wgpu::BufferAddress,
-        ),
+        BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
+        crate::renderers::cube::IndexedIndirectComponent::new(obj_indirect),
+        BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
     ));
 }
 

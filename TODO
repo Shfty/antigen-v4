@@ -1,5 +1,27 @@
-[ ] Better model / texture loading generalization
-[ ] Map loading
+[>] Better model / texture loading generalization
+    [>] Model loading
+        [✓] Implement generalized vertex property components
+            * Position, normal, UV, etc.
+        [✓] Implement renderer-specific systems to translate components into render data
+        [>] Automatically pack vertex, index, instance, indirect data
+            [✓] Implement MeshId component to allow for ordered sorting
+            [✓] Pack vertices in system
+            [✓] Pack indices in system
+            [>] Pack instances, indirects in system
+                * Indirect vertex count, base index, vertex offset need to be updated based on automatic packing
+                * Indirect is per-instance, so will need a way to fetch vertex / index offsets for this
+        [ ] Implement on-change updates for vertex, index, instance, indirect data
+    [ ] Texture loading
+
+[>] Map loading
+
+[ ] Algebraic types refactor
+    [ ] Generalized components / systems should use mint types
+        * ex. Crunch numbers with nalgebra in shambler,
+          convert to mint for dispatch to components / systems
+        * Should probably use mint for shalrath vector types
+            * Convert to nalgebra when going into shambler
+
 [ ] Portal system
 
 * antigen-rapier
