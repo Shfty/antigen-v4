@@ -19,7 +19,25 @@ use cgmath::{InnerSpace, One, Zero};
 use legion::{Entity, World};
 use wgpu::BufferAddress;
 
-use crate::renderers::{boids::BoidsRenderer, bunnymark::BunnymarkRenderer, conservative_raster::ConservativeRasterRenderer, cube::{BufferWriteIndexedIndirect, BufferWriteIndices, BufferWriteInstances, BufferWriteVertices, CubeRenderer, IndexBufferComponent, IndexBufferOffsets, IndirectBufferComponent, IndirectBufferOffsets, InstanceBufferComponent, InstanceBufferOffsets, UniformBufferComponent, Uniforms, UniformsComponent, VertexBufferComponent, VertexBufferOffsets}, hello_triangle::TriangleRenderer, mipmap::MipmapRenderer, msaa_lines::MsaaLinesRenderer, shadow::ShadowRenderer, skybox::SkyboxRenderer, texture_arrays::TextureArraysRenderer, water::WaterRenderer};
+use crate::renderers::{
+    boids::BoidsRenderer,
+    bunnymark::BunnymarkRenderer,
+    conservative_raster::ConservativeRasterRenderer,
+    cube::{
+        BufferWriteIndexedIndirect, BufferWriteIndices, BufferWriteInstances, BufferWriteVertices,
+        CubeRenderer, IndexBufferComponent, IndexBufferOffsets, IndirectBufferComponent,
+        IndirectBufferOffsets, InstanceBufferComponent, InstanceBufferOffsets,
+        UniformBufferComponent, Uniforms, UniformsComponent, VertexBufferComponent,
+        VertexBufferOffsets,
+    },
+    hello_triangle::TriangleRenderer,
+    mipmap::MipmapRenderer,
+    msaa_lines::MsaaLinesRenderer,
+    shadow::ShadowRenderer,
+    skybox::SkyboxRenderer,
+    texture_arrays::TextureArraysRenderer,
+    water::WaterRenderer,
+};
 
 type BufferWriteViewProjectionMatrix =
     BufferWrite<ViewProjectionMatrix, antigen_cgmath::cgmath::Matrix4<f32>>;
@@ -142,7 +160,6 @@ impl<T> Default for BufferOffsetsComponent<T> {
         }
     }
 }
-
 
 /// The target vertex buffer to store mesh data into
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -543,6 +560,14 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
             Name::new(format!("Tetrahedron #{}", i)),
             antigen_cgmath::components::Position3d::new(offset * 3.0),
             antigen_cgmath::components::Orientation::default(),
+            crate::components::SphereBounds(1.0),
+            // Instance data
+            crate::renderers::cube::InstanceComponent::default(),
+            BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
+            // Indirect data
+            crate::renderers::cube::IndexedIndirectComponent::new(tetrahedron_indirect),
+            BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
+            // Collision
             antigen_rapier3d::RigidBodyComponent {
                 physics_sim_entity,
                 pending_rigid_body: Some(RigidBodyBuilder::new_dynamic().build()),
@@ -555,11 +580,6 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
                 parent_handle: None,
                 handle: None,
             },
-            crate::components::SphereBounds(1.0),
-            crate::renderers::cube::InstanceComponent::default(),
-            BufferWriteInstances::new(None, Some(instance_buffer_entity), 0),
-            crate::renderers::cube::IndexedIndirectComponent::new(tetrahedron_indirect),
-            BufferWriteIndexedIndirect::new(None, Some(indirect_buffer_entity), 0),
         ));
 
         dir = cgmath::Matrix4::from_angle_x(cgmath::Deg(360.0 / tetrahedron_count as f32)) * dir;
