@@ -1,4 +1,8 @@
-use antigen_wgpu::{components::BufferWrite, CastSlice, RenderPass, WgpuManager};
+use antigen_rapier3d::rapier3d::parry::utils::hashmap::HashMap;
+use antigen_wgpu::{
+    components::{BufferComponent, BufferWrite},
+    CastSlice, RenderPass, WgpuManager,
+};
 use bytemuck::{Pod, Zeroable};
 use cgmath::{One, Zero};
 use lazy::Lazy;
@@ -21,13 +25,17 @@ use antigen_resources::Timing;
 use antigen_cgmath::components::{EyePosition, LookAt, Position3d, ProjectionMatrix};
 use antigen_wgpu::DrawIndexedIndirect;
 
-use crate::assemblages::{MeshId, MeshNormals, MeshTriangleIndices, MeshUvs, MeshVertices};
+use crate::assemblages::{
+    BufferOffsetsComponent, IndexBufferEntity, MeshId, MeshNormals, MeshTriangleIndices, MeshUvs,
+    MeshVertices, VertexBufferEntity,
+};
 
 pub type BufferWriteVertices =
     BufferWrite<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>;
 legion_debugger::register_component!(BufferWriteVertices);
 
-pub type BufferWriteIndices = BufferWrite<crate::renderers::cube::Indices, Vec<u16>>;
+pub type BufferWriteIndices =
+    BufferWrite<crate::renderers::cube::Indices, Vec<crate::renderers::cube::Index>>;
 legion_debugger::register_component!(BufferWriteIndices);
 
 pub type BufferWriteInstances =
@@ -39,6 +47,33 @@ pub type BufferWriteIndexedIndirect = BufferWrite<
     antigen_wgpu::DrawIndexedIndirect,
 >;
 legion_debugger::register_component!(BufferWriteIndexedIndirect);
+
+pub type VertexBufferComponent = BufferComponent<Vec<Vertex>>;
+legion_debugger::register_component!(VertexBufferComponent);
+
+pub type IndexBufferComponent = BufferComponent<Vec<Index>>;
+legion_debugger::register_component!(IndexBufferComponent);
+
+pub type InstanceBufferComponent = BufferComponent<Instance>;
+legion_debugger::register_component!(InstanceBufferComponent);
+
+pub type IndirectBufferComponent = BufferComponent<DrawIndexedIndirect>;
+legion_debugger::register_component!(IndirectBufferComponent);
+
+pub type UniformBufferComponent = BufferComponent<Uniforms>;
+legion_debugger::register_component!(UniformBufferComponent);
+
+pub type VertexBufferOffsets = BufferOffsetsComponent<Vec<Vertex>>;
+legion_debugger::register_component!(VertexBufferOffsets);
+
+pub type IndexBufferOffsets = BufferOffsetsComponent<Vec<Index>>;
+legion_debugger::register_component!(IndexBufferOffsets);
+
+pub type InstanceBufferOffsets = BufferOffsetsComponent<Instance>;
+legion_debugger::register_component!(InstanceBufferOffsets);
+
+pub type IndirectBufferOffsets = BufferOffsetsComponent<DrawIndexedIndirect>;
+legion_debugger::register_component!(IndirectBufferOffsets);
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
@@ -963,103 +998,141 @@ pub fn update_uniforms(
 #[read_component(MeshVertices<nalgebra::Vector3::<f32>>)]
 #[read_component(MeshNormals<nalgebra::Vector3::<f32>>)]
 #[read_component(MeshUvs<nalgebra::Vector2::<f32>>)]
+#[read_component(VertexBufferEntity)]
+#[read_component(VertexBufferComponent)]
+#[write_component(VertexBufferOffsets)]
 #[write_component(Vertices)]
-#[write_component(BufferWriteVertices)]
 pub fn collect_vertices(world: &mut SubWorld) {
-    let mut query = <(
+    let mut mesh_vertex_query = <(
         &MeshId,
         &MeshVertices<nalgebra::Vector3<f32>>,
         &MeshNormals<nalgebra::Vector3<f32>>,
         &MeshUvs<nalgebra::Vector2<f32>>,
-        &mut Vertices,
+        &VertexBufferEntity,
     )>::query();
 
     // Iterate through entities with mesh data and renderer vertices,
     // collect into a sorted map of mesh id -> buffer length
-    let lengths = query
-        .par_iter_mut(world)
+    let mesh_vertices = mesh_vertex_query
+        .par_iter(world)
         .map(
-            |(mesh_id, mesh_vertices, mesh_normals, mesh_uvs, Vertices(cube_vertices))| {
-                let mut verts = vec![];
-                for (vertex, (normal, uv)) in mesh_vertices
-                    .iter()
-                    .zip(mesh_normals.iter().zip(mesh_uvs.iter()))
-                {
-                    verts.push(Vertex {
-                        pos: [vertex.x, vertex.y, vertex.z],
-                        _pad_0: 1.0,
-                        normal: [normal.x, normal.y, normal.z],
-                        _pad_1: 0.0,
-                        tex_coord: [uv.x, uv.y],
-                        texture: 0,
-                    });
-                }
-
-                cube_vertices.set(verts);
-                (*mesh_id, mesh_vertices.len())
+            |(mesh_id, mesh_vertices, mesh_normals, mesh_uvs, vertex_buffer_entity)| {
+                (
+                    vertex_buffer_entity.0,
+                    (
+                        *mesh_id,
+                        mesh_vertices.clone(),
+                        mesh_normals.clone(),
+                        mesh_uvs.clone(),
+                    ),
+                )
             },
         )
-        .collect::<BTreeMap<_, _>>();
+        .collect::<Vec<(_, _)>>();
 
-    // Calculate offsets from buffer lengths
-    let mut offset = 0;
-    let offsets = lengths
-        .into_iter()
-        .map(|(mesh_id, len)| {
-            let prev_offset = offset;
-            offset += len * std::mem::size_of::<Vertex>();
-            (mesh_id, prev_offset)
-        })
-        .collect::<BTreeMap<_, _>>();
+    let mut vertex_buffer_query = <(
+        Entity,
+        &VertexBufferComponent,
+        &mut VertexBufferOffsets,
+        &mut Vertices,
+    )>::query();
 
-    // Write offsets to buffer write components
-    let mut query = <(&MeshId, &mut Vertices, &mut BufferWriteVertices)>::query();
-    query.par_for_each_mut(world, |(mesh_id, _, buffer_write)| {
-        buffer_write.set_offset(offsets[mesh_id] as u64);
-    });
+    let vertex_buffers = vertex_buffer_query
+        .par_iter_mut(world)
+        .map(|(entity, buffer, offsets, vertices)| (entity, (buffer, offsets, vertices)))
+        .collect::<HashMap<_, _>>();
+
+    for (buffer_entity, (_, offsets, vertices)) in vertex_buffers {
+        let meshes = mesh_vertices
+            .iter()
+            .filter_map(|(buffer_id, (mesh_id, vertices, normals, uvs))| {
+                if buffer_id == buffer_entity {
+                    Some((mesh_id, (vertices, normals, uvs)))
+                } else {
+                    None
+                }
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let mut verts = vec![];
+        let mut offs = vec![];
+        for (_, (vertices, normals, uvs)) in meshes {
+            offs.push(verts.len() * std::mem::size_of::<Vertex>());
+
+            for (vertex, (normal, uv)) in vertices.iter().zip(normals.iter().zip(uvs.iter())) {
+                verts.push(Vertex {
+                    pos: [vertex.x, vertex.y, vertex.z],
+                    _pad_0: 1.0,
+                    normal: [normal.x, normal.y, normal.z],
+                    _pad_1: 0.0,
+                    tex_coord: [uv.x, uv.y],
+                    texture: 0,
+                });
+            }
+        }
+        vertices.0.set(verts);
+        offsets.offsets = offs;
+    }
 }
 
 /// Iterate over mesh entities, translate generic components into renderer indices
 #[legion::system]
 #[read_component(MeshId)]
 #[read_component(MeshTriangleIndices<usize>)]
+#[read_component(IndexBufferEntity)]
+#[read_component(IndexBufferComponent)]
+#[write_component(IndexBufferOffsets)]
 #[write_component(Indices)]
-#[write_component(BufferWriteIndices)]
 pub fn collect_indices(world: &mut SubWorld) {
-    let mut query = <(&MeshId, &MeshTriangleIndices<usize>, &mut Indices)>::query();
+    let mut mesh_index_query =
+        <(&MeshId, &MeshTriangleIndices<usize>, &IndexBufferEntity)>::query();
 
-    // Iterate through entities with mesh data and renderer indices,
+    // Iterate through entities with mesh data and renderer vertices,
     // collect into a sorted map of mesh id -> buffer length
-    let lengths = query
+    let mesh_indices = mesh_index_query
+        .par_iter(world)
+        .map(|(mesh_id, mesh_indices, index_buffer_entity)| {
+            (index_buffer_entity.0, (*mesh_id, mesh_indices.clone()))
+        })
+        .collect::<Vec<(_, _)>>();
+
+    let mut index_buffer_query = <(
+        Entity,
+        &IndexBufferComponent,
+        &mut IndexBufferOffsets,
+        &mut Indices,
+    )>::query();
+
+    let index_buffers = index_buffer_query
         .par_iter_mut(world)
-        .map(|(mesh_id, mesh_indices, Indices(cube_indices))| {
-            let mut inds = vec![];
-            for index in mesh_indices.iter()
-            {
+        .map(|(entity, buffer, offsets, indices)| (entity, (buffer, offsets, indices)))
+        .collect::<HashMap<_, _>>();
+
+    for (buffer_entity, (_, offsets, indices)) in index_buffers {
+        let meshes = mesh_indices
+            .iter()
+            .filter_map(|(buffer_id, (mesh_id, indices))| {
+                if buffer_id == buffer_entity {
+                    Some((mesh_id, indices))
+                } else {
+                    None
+                }
+            })
+            .collect::<BTreeMap<_, _>>();
+
+        let mut inds = vec![];
+        let mut offs = vec![];
+        for (_, indices) in meshes {
+            let ind_ofs = inds.len() * std::mem::size_of::<Index>();
+            offs.push(ind_ofs);
+
+            for index in indices.iter() {
                 inds.push(*index as u16);
             }
-
-            cube_indices.set(inds);
-            (*mesh_id, mesh_indices.len())
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    // Calculate offsets from buffer lengths
-    let mut offset = 0;
-    let offsets = lengths
-        .into_iter()
-        .map(|(mesh_id, len)| {
-            let prev_offset = offset;
-            offset += len * std::mem::size_of::<Index>();
-            (mesh_id, prev_offset)
-        })
-        .collect::<BTreeMap<_, _>>();
-
-    // Write offsets to buffer write components
-    let mut query = <(&MeshId, &mut Indices, &mut BufferWriteIndices)>::query();
-    query.par_for_each_mut(world, |(mesh_id, _, buffer_write)| {
-        buffer_write.set_offset(offsets[mesh_id] as u64);
-    });
+        }
+        indices.0.set(inds);
+        offsets.offsets = offs;
+    }
 }
 
 /// Iterate over mesh entities, translate generic components into instance and indirect data

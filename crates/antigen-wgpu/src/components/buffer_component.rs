@@ -1,30 +1,33 @@
+use serde::ser::SerializeStruct;
 use std::{ops::Deref, sync::Arc};
 use wgpu::Buffer;
-use serde::ser::SerializeStruct;
 
 #[derive(Debug, Clone)]
-pub struct BufferComponent(pub Arc<Buffer>);
+pub struct BufferComponent<T> {
+    pub buffer: Arc<Buffer>,
+    _phantom: std::marker::PhantomData<T>,
+}
 
-impl Deref for BufferComponent {
+impl<T> Deref for BufferComponent<T> {
     type Target = Arc<Buffer>;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.buffer
     }
 }
 
-impl serde::Serialize for BufferComponent {
+impl<T> serde::Serialize for BufferComponent<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        serializer
-            .serialize_struct("BufferComponent", 0)?
-            .end()
+        let mut s = serializer.serialize_struct("BufferComponent", 1)?;
+        s.serialize_field("T", std::any::type_name::<T>())?;
+        s.end()
     }
 }
 
-impl<'de> serde::Deserialize<'de> for BufferComponent {
+impl<'de, T> serde::Deserialize<'de> for BufferComponent<T> {
     fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -33,10 +36,11 @@ impl<'de> serde::Deserialize<'de> for BufferComponent {
     }
 }
 
-impl From<Arc<Buffer>> for BufferComponent {
-    fn from(v: Arc<Buffer>) -> Self {
-        BufferComponent(v)
+impl<T> From<Arc<Buffer>> for BufferComponent<T> {
+    fn from(buffer: Arc<Buffer>) -> Self {
+        BufferComponent {
+            buffer,
+            _phantom: Default::default(),
+        }
     }
 }
-
-legion_debugger::register_component!(BufferComponent);

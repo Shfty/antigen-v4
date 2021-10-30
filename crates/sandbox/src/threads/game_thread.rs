@@ -16,7 +16,7 @@ use wgpu::Queue;
 
 use crate::{
     renderers::cube::{
-        IndexedIndirectComponent, Indices, Instance, InstanceComponent, Vertex, Vertices,
+        Index, IndexedIndirectComponent, Indices, Instance, InstanceComponent, Vertex, Vertices,
     },
     spin_loop,
     systems::{
@@ -26,7 +26,7 @@ use crate::{
     Shared, SharedState,
 };
 
-const DEBUGGER: bool = true;
+const DEBUGGER: bool = false;
 
 const GAME_TICK_HZ: f64 = 60.0;
 const GAME_TICK_SECS: f64 = 1.0 / GAME_TICK_HZ;
@@ -62,16 +62,18 @@ pub fn game_thread<'a>(
             .flush()
             .add_system(crate::renderers::cube::collect_vertices_system())
             .add_system(crate::renderers::cube::collect_indices_system())
-            .add_system(crate::renderers::cube::collect_instances_indirects_system())
-            .add_system(crate::renderers::cube::update_uniforms_system())
             .add_system(crate::renderers::cube::update_instances_system())
+            .add_system(crate::renderers::cube::update_uniforms_system())
+            .flush()
+            .add_system(crate::renderers::cube::collect_instances_indirects_system())
+            .flush()
             .add_system(antigen_wgpu::systems::buffer_write_system::<
                 Vertices,
                 Vec<Vertex>,
             >())
             .add_system(antigen_wgpu::systems::buffer_write_system::<
                 Indices,
-                Vec<u16>,
+                Vec<Index>,
             >())
             .add_system(antigen_wgpu::systems::buffer_write_system::<
                 InstanceComponent,

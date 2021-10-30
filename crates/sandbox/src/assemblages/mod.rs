@@ -19,22 +19,7 @@ use cgmath::{InnerSpace, One, Zero};
 use legion::{Entity, World};
 use wgpu::BufferAddress;
 
-use crate::renderers::{
-    boids::BoidsRenderer,
-    bunnymark::BunnymarkRenderer,
-    conservative_raster::ConservativeRasterRenderer,
-    cube::{
-        BufferWriteIndexedIndirect, BufferWriteIndices, BufferWriteInstances, BufferWriteVertices,
-        CubeRenderer, Uniforms, UniformsComponent,
-    },
-    hello_triangle::TriangleRenderer,
-    mipmap::MipmapRenderer,
-    msaa_lines::MsaaLinesRenderer,
-    shadow::ShadowRenderer,
-    skybox::SkyboxRenderer,
-    texture_arrays::TextureArraysRenderer,
-    water::WaterRenderer,
-};
+use crate::renderers::{boids::BoidsRenderer, bunnymark::BunnymarkRenderer, conservative_raster::ConservativeRasterRenderer, cube::{BufferWriteIndexedIndirect, BufferWriteIndices, BufferWriteInstances, BufferWriteVertices, CubeRenderer, IndexBufferComponent, IndexBufferOffsets, IndirectBufferComponent, IndirectBufferOffsets, InstanceBufferComponent, InstanceBufferOffsets, UniformBufferComponent, Uniforms, UniformsComponent, VertexBufferComponent, VertexBufferOffsets}, hello_triangle::TriangleRenderer, mipmap::MipmapRenderer, msaa_lines::MsaaLinesRenderer, shadow::ShadowRenderer, skybox::SkyboxRenderer, texture_arrays::TextureArraysRenderer, water::WaterRenderer};
 
 type BufferWriteViewProjectionMatrix =
     BufferWrite<ViewProjectionMatrix, antigen_cgmath::cgmath::Matrix4<f32>>;
@@ -143,20 +128,31 @@ pub fn hello_triangle_renderer(world: &mut World, wgpu_manager: &WgpuManager) ->
 }
 
 /// The list of element offsets into a given buffer
-#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
-struct BufferOffsetsComponent(pub Vec<usize>);
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BufferOffsetsComponent<T> {
+    pub offsets: Vec<usize>,
+    _phantom: std::marker::PhantomData<T>,
+}
 
-legion_debugger::register_component!(BufferOffsetsComponent);
+impl<T> Default for BufferOffsetsComponent<T> {
+    fn default() -> Self {
+        BufferOffsetsComponent {
+            offsets: Default::default(),
+            _phantom: Default::default(),
+        }
+    }
+}
+
 
 /// The target vertex buffer to store mesh data into
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct VertexBufferEntity(pub Entity);
+pub struct VertexBufferEntity(pub Entity);
 
 legion_debugger::register_component!(VertexBufferEntity);
 
-/// The target index buffer to store mesh indices into
+/// The target index buffer to store mesh data into
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-struct IndexBufferEntity(pub Entity);
+pub struct IndexBufferEntity(pub Entity);
 
 legion_debugger::register_component!(IndexBufferEntity);
 
@@ -299,7 +295,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     );
 
     let uniform_buffer_component =
-        BufferComponent::from(cube_renderer.take_uniform_buffer_handle());
+        UniformBufferComponent::from(cube_renderer.take_uniform_buffer_handle());
 
     let vertex_buffer = cube_renderer.take_vertex_buffer_handle();
     let index_buffer = cube_renderer.take_index_buffer_handle();
@@ -395,26 +391,30 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
 
     let vertex_buffer_entity = world.push((
         Name::new("Vertex Buffer"),
-        BufferComponent(vertex_buffer),
-        BufferOffsetsComponent::default(),
+        VertexBufferComponent::from(vertex_buffer),
+        VertexBufferOffsets::default(),
+        crate::renderers::cube::Vertices::new(Default::default()),
+        BufferWriteVertices::new(None, None, 0),
     ));
 
     let index_buffer_entity = world.push((
         Name::new("Index Buffer"),
-        BufferComponent(index_buffer),
-        BufferOffsetsComponent::default(),
+        IndexBufferComponent::from(index_buffer),
+        IndexBufferOffsets::default(),
+        crate::renderers::cube::Indices::new(Default::default()),
+        BufferWriteIndices::new(None, None, 0),
     ));
 
     let instance_buffer_entity = world.push((
         Name::new("Instance Buffer"),
-        BufferComponent(instance_buffer),
-        BufferOffsetsComponent::default(),
+        InstanceBufferComponent::from(instance_buffer),
+        InstanceBufferOffsets::default(),
     ));
 
     let indirect_buffer_entity = world.push((
         Name::new("Indirect Buffer"),
-        BufferComponent(indirect_buffer),
-        BufferOffsetsComponent::default(),
+        IndirectBufferComponent::from(indirect_buffer),
+        IndirectBufferOffsets::default(),
     ));
 
     // Indirect draw data
@@ -454,93 +454,57 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     // Tetrahedron mesh
     let tetrahedron_mesh_id = MeshId::next();
 
-    let tetrahedron_vertices_entity = world.push((
-        Name::new("Tetrahedron Vertices"),
+    let tetrahedron_mesh_entity = world.push((
+        Name::new("Tetrahedron Mesh"),
         tetrahedron_mesh_id,
         MeshVertices(tetrahedron_vertices.clone()),
         MeshNormals(tetrahedron_normals.clone()),
         MeshUvs(tetrahedron_uvs.clone()),
-        VertexBufferEntity(vertex_buffer_entity),
-        crate::renderers::cube::Vertices::new(Default::default()),
-        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
-    ));
-
-    let tetrahedron_indices_entity = world.push((
-        Name::new("Tetrahedron Indices"),
-        tetrahedron_mesh_id,
         MeshTriangleIndices(tetrahedron_triangle_indices.clone()),
+        VertexBufferEntity(vertex_buffer_entity),
         IndexBufferEntity(index_buffer_entity),
-        crate::renderers::cube::Indices::new(Default::default()),
-        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
     ));
 
     // Cube mesh
     let cube_mesh_id = MeshId::next();
 
-    let cube_vertices_entity = world.push((
-        Name::new("Cube Vertices"),
+    let cube_mesh_entity = world.push((
+        Name::new("Cube Mesh"),
         cube_mesh_id,
         MeshVertices(cube_vertices.clone()),
         MeshNormals(cube_normals.clone()),
         MeshUvs(cube_uvs.clone()),
-        VertexBufferEntity(vertex_buffer_entity),
-        crate::renderers::cube::Vertices::new(Default::default()),
-        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
-    ));
-
-    let cube_indices_entity = world.push((
-        Name::new("Cube Indices"),
-        cube_mesh_id,
         MeshTriangleIndices(cube_triangle_indices.clone()),
+        VertexBufferEntity(vertex_buffer_entity),
         IndexBufferEntity(index_buffer_entity),
-        crate::renderers::cube::Indices::new(Default::default()),
-        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
     ));
 
     // Abstract test mesh
     let abstract_test_mesh_id = MeshId::next();
 
-    let abstract_test_vertices_entity = world.push((
-        Name::new("Abstract Test Vertices"),
+    let abstract_test_mesh_entity = world.push((
+        Name::new("Abstract Test Mesh"),
         abstract_test_mesh_id,
         MeshVertices(abstract_test_vertices.clone()),
         MeshNormals(abstract_test_normals.clone()),
         MeshUvs(abstract_test_uvs.clone()),
-        VertexBufferEntity(vertex_buffer_entity),
-        crate::renderers::cube::Vertices::new(Default::default()),
-        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
-    ));
-
-    let abstract_test_indices_entity = world.push((
-        Name::new("Abstract Test Indices"),
-        abstract_test_mesh_id,
         MeshTriangleIndices(abstract_test_triangle_indices.clone()),
+        VertexBufferEntity(vertex_buffer_entity),
         IndexBufferEntity(index_buffer_entity),
-        crate::renderers::cube::Indices::new(Default::default()),
-        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
     ));
 
     // OBJ mesh
     let obj_mesh_id = MeshId::next();
 
-    let obj_vertices_entity = world.push((
-        Name::new("OBJ Vertices"),
+    let obj_mesh_entity = world.push((
+        Name::new("OBJ Mesh"),
         obj_mesh_id,
         MeshVertices(obj_vertices.clone()),
         MeshNormals(obj_normals.clone()),
         MeshUvs(obj_uvs.clone()),
-        VertexBufferEntity(vertex_buffer_entity),
-        crate::renderers::cube::Vertices::new(Default::default()),
-        BufferWriteVertices::new(None, Some(vertex_buffer_entity), 0),
-    ));
-
-    let obj_indices_entity = world.push((
-        Name::new("OBJ Indices"),
-        obj_mesh_id,
         MeshTriangleIndices(obj_indices.clone()),
+        VertexBufferEntity(vertex_buffer_entity),
         IndexBufferEntity(index_buffer_entity),
-        crate::renderers::cube::Indices::new(Default::default()),
-        BufferWriteIndices::new(None, Some(index_buffer_entity), 0),
     ));
 
     // Floor entity
