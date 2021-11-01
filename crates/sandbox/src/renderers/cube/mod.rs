@@ -22,21 +22,28 @@ use wgpu::{
 
 use antigen_resources::Timing;
 
-use antigen_cgmath::components::{EyePosition, LookAt, Position3d, ProjectionMatrix};
+use antigen_cgmath::components::{EyePosition, LookAt, ProjectionMatrix};
 use antigen_wgpu::DrawIndexedIndirect;
 
-use crate::assemblages::{
-    BufferOffsetsComponent, IndexBufferEntity, MeshId, MeshNormals, MeshTriangleIndices, MeshUvs,
-    MeshVertices, VertexBufferEntity,
-};
+use crate::assemblages::{IndexBuffer, MeshEntity, MeshId, MeshNormals, MeshTextureIds, MeshTextureIdsI32, MeshTriangleIndices, MeshUvs, MeshVertices, VertexBuffer};
 
-pub type BufferWriteVertices =
-    BufferWrite<crate::renderers::cube::Vertices, Vec<crate::renderers::cube::Vertex>>;
-legion_debugger::register_component!(BufferWriteVertices);
+pub type BufferWriteMeshVertices =
+    BufferWrite<MeshVertices<nalgebra::Vector3<f32>>, Vec<nalgebra::Vector3<f32>>>;
+legion_debugger::register_component!(BufferWriteMeshVertices);
 
-pub type BufferWriteIndices =
-    BufferWrite<crate::renderers::cube::Indices, Vec<crate::renderers::cube::Index>>;
-legion_debugger::register_component!(BufferWriteIndices);
+pub type BufferWriteMeshNormals =
+    BufferWrite<MeshNormals<nalgebra::Vector3<f32>>, Vec<nalgebra::Vector3<f32>>>;
+legion_debugger::register_component!(BufferWriteMeshNormals);
+
+pub type BufferWriteMeshUvs =
+    BufferWrite<MeshUvs<nalgebra::Vector2<f32>>, Vec<nalgebra::Vector2<f32>>>;
+legion_debugger::register_component!(BufferWriteMeshUvs);
+
+pub type BufferWriteMeshTextureIds = BufferWrite<MeshTextureIdsI32, Vec<i32>>;
+legion_debugger::register_component!(BufferWriteMeshTextureIds);
+
+pub type BufferWriteMeshTriangleIndices = BufferWrite<MeshTriangleIndices<Index>, Vec<Index>>;
+legion_debugger::register_component!(BufferWriteMeshTriangleIndices);
 
 pub type BufferWritePosition =
     BufferWrite<antigen_cgmath::components::Position3d, antigen_cgmath::cgmath::Vector3<f32>>;
@@ -55,57 +62,6 @@ pub type BufferWriteIndexedIndirect = BufferWrite<
     antigen_wgpu::DrawIndexedIndirect,
 >;
 legion_debugger::register_component!(BufferWriteIndexedIndirect);
-
-pub type VertexBufferOffsets = BufferOffsetsComponent<Vec<Vertex>>;
-legion_debugger::register_component!(VertexBufferOffsets);
-
-pub type IndexBufferOffsets = BufferOffsetsComponent<Vec<Index>>;
-legion_debugger::register_component!(IndexBufferOffsets);
-
-pub type InstanceBufferOffsets = BufferOffsetsComponent<Instance>;
-legion_debugger::register_component!(InstanceBufferOffsets);
-
-pub type IndirectBufferOffsets = BufferOffsetsComponent<DrawIndexedIndirect>;
-legion_debugger::register_component!(IndirectBufferOffsets);
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, Pod, Zeroable, serde::Serialize, serde::Deserialize)]
-pub struct Vertex {
-    pub pos: [f32; 3],
-    _pad_0: f32,
-    pub normal: [f32; 3],
-    _pad_1: f32,
-    pub tex_coord: [f32; 2],
-    pub texture: i32,
-}
-
-pub fn vertex(pos: [f32; 3], normal: [f32; 3], tc: [f32; 2], ti: i32) -> Vertex {
-    Vertex {
-        pos,
-        _pad_0: 1.0,
-        normal,
-        _pad_1: 0.0,
-        tex_coord: tc,
-        texture: ti,
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct Vertices(pub OnChange<Vec<Vertex>>);
-
-impl Vertices {
-    pub fn new(vertices: Vec<Vertex>) -> Self {
-        Vertices(OnChange::new_dirty(vertices))
-    }
-}
-
-impl OnChangeTrait<Vec<Vertex>> for Vertices {
-    fn take_change(&self) -> Option<&Vec<Vertex>> {
-        self.0.take_change()
-    }
-}
-
-legion_debugger::register_component!(Vertices);
 
 #[repr(C)]
 #[derive(
@@ -238,23 +194,6 @@ legion_debugger::register_component!(InstanceComponent);
 pub type Index = u16;
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct Indices(pub OnChange<Vec<Index>>);
-
-impl Indices {
-    pub fn new(indices: Vec<Index>) -> Self {
-        Indices(OnChange::new_dirty(indices))
-    }
-}
-
-impl OnChangeTrait<Vec<Index>> for Indices {
-    fn take_change(&self) -> Option<&Vec<Index>> {
-        self.0.take_change()
-    }
-}
-
-legion_debugger::register_component!(Indices);
-
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct IndexedIndirectComponent(pub OnChange<DrawIndexedIndirect>);
 
 impl IndexedIndirectComponent {
@@ -292,13 +231,75 @@ pub struct CubeRenderer {
         (Arc<Device>, TextureFormat),
     >,
 
+    vertex_count: BufferAddress,
     indirect_count: BufferAddress,
+
     prev_width: u32,
     prev_height: u32,
 }
 
 impl CubeRenderer {
     const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+    const VERTEX_BUFFER_LAYOUTS: [VertexBufferLayout<'static>; 5] = [
+        // Position
+        VertexBufferLayout {
+            array_stride: 4 * 3,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 0,
+            }],
+        },
+        // Normal
+        VertexBufferLayout {
+            array_stride: 4 * 3,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 1,
+            }],
+        },
+        // Texture coordinate
+        VertexBufferLayout {
+            array_stride: 4 * 2,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 0,
+                shader_location: 2,
+            }],
+        },
+        // Texture ID
+        VertexBufferLayout {
+            array_stride: 4,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Sint32,
+                offset: 0,
+                shader_location: 3,
+            }],
+        },
+        // Instance
+        VertexBufferLayout {
+            array_stride: (4 * 8) + std::mem::size_of::<Instance>() as BufferAddress,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 0,
+                    shader_location: 4,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 4 * 4,
+                    shader_location: 5,
+                },
+            ],
+        },
+    ];
 
     const COMPUTE_BIND_GROUP_LAYOUT_DESC: BindGroupLayoutDescriptor<'static> =
         BindGroupLayoutDescriptor {
@@ -343,51 +344,6 @@ impl CubeRenderer {
             ],
         };
 
-    const VERTEX_BUFFER_LAYOUTS: [VertexBufferLayout<'static>; 2] = [
-        VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 4 * 4,
-                    shader_location: 1,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 4 * 8,
-                    shader_location: 2,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Sint32,
-                    offset: 4 * 10,
-                    shader_location: 3,
-                },
-            ],
-        },
-        VertexBufferLayout {
-            array_stride: (4 * 8) + std::mem::size_of::<Instance>() as BufferAddress,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 0,
-                    shader_location: 4,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 4 * 4,
-                    shader_location: 5,
-                },
-            ],
-        },
-    ];
-
     pub fn new(
         wgpu_manager: &WgpuManager,
         vertex_count: BufferAddress,
@@ -402,7 +358,7 @@ impl CubeRenderer {
         // Create vertex, index, indirect and instance buffers
         let vertex_buffer = Arc::new(device.create_buffer(&BufferDescriptor {
             label: Some("Vertex Buffer"),
-            size: std::mem::size_of::<Vertex>() as BufferAddress * vertex_count,
+            size: 4 * 9 * vertex_count,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         }));
@@ -580,6 +536,8 @@ impl CubeRenderer {
                         entry_point: "main",
                     });
 
+                let vertex_buffer_layouts = Self::VERTEX_BUFFER_LAYOUTS;
+
                 let cube_pipeline =
                     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                         label: None,
@@ -587,7 +545,7 @@ impl CubeRenderer {
                         vertex: wgpu::VertexState {
                             module: &render_shader,
                             entry_point: "vs_main",
-                            buffers: &Self::VERTEX_BUFFER_LAYOUTS,
+                            buffers: &vertex_buffer_layouts,
                         },
                         fragment: Some(wgpu::FragmentState {
                             module: &render_shader,
@@ -619,7 +577,7 @@ impl CubeRenderer {
                             vertex: wgpu::VertexState {
                                 module: &render_shader,
                                 entry_point: "vs_main",
-                                buffers: &Self::VERTEX_BUFFER_LAYOUTS,
+                                buffers: &vertex_buffer_layouts,
                             },
                             fragment: Some(wgpu::FragmentState {
                                 module: &render_shader,
@@ -672,6 +630,7 @@ impl CubeRenderer {
             texture,
             depth_texture: None,
             pipelines,
+            vertex_count,
             indirect_count,
             prev_width: 0,
             prev_height: 0,
@@ -797,10 +756,31 @@ impl RenderPass for CubeRenderer {
             }),
         });
 
+        let vertex_len = self.vertex_count * 4 * 3;
+        let normal_len = self.vertex_count * 4 * 3;
+        let uv_len = self.vertex_count * 4 * 2;
+        let texture_len = self.vertex_count * 4;
+
         rpass.push_debug_group("Prepare data for draw.");
         rpass.set_pipeline(cube_pipeline);
-        rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        rpass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+        rpass.set_vertex_buffer(0, self.vertex_buffer.slice(0..vertex_len));
+        rpass.set_vertex_buffer(
+            1,
+            self.vertex_buffer
+                .slice(vertex_len..vertex_len + normal_len),
+        );
+        rpass.set_vertex_buffer(
+            2,
+            self.vertex_buffer
+                .slice(vertex_len + normal_len..vertex_len + normal_len + uv_len),
+        );
+        rpass.set_vertex_buffer(
+            3,
+            self.vertex_buffer.slice(
+                vertex_len + normal_len + uv_len..vertex_len + normal_len + uv_len + texture_len,
+            ),
+        );
+        rpass.set_vertex_buffer(4, self.instance_buffer.slice(..));
         rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
         rpass.set_bind_group(0, &self.render_bind_group, &[]);
         rpass.pop_debug_group();
@@ -848,17 +828,6 @@ pub fn update_instances(
 ) {
     let mut inst = *instance.get();
 
-    /*
-    if let Some(position) = position {
-        let pos: [f32; 3] = *position.get().as_ref();
-        inst._position = [pos[0], pos[1], pos[2], 0.0];
-    }
-
-    if let Some(orientation) = orientation {
-        inst._orientation = *(*orientation).as_ref();
-    }
-    */
-
     if let Some(visible) = visible {
         inst._visible = **visible as u32;
     }
@@ -900,150 +869,165 @@ pub fn update_uniforms(
 
 /// Iterate over mesh entities, translate generic components into renderer vertices
 #[legion::system]
+#[read_component(VertexBuffer)]
+#[read_component(BufferComponent)]
 #[read_component(MeshId)]
 #[read_component(MeshVertices<nalgebra::Vector3::<f32>>)]
 #[read_component(MeshNormals<nalgebra::Vector3::<f32>>)]
 #[read_component(MeshUvs<nalgebra::Vector2::<f32>>)]
-#[read_component(VertexBufferEntity)]
-#[read_component(BufferComponent)]
-#[write_component(VertexBufferOffsets)]
-#[write_component(Vertices)]
+#[read_component(MeshTextureIds<i32>)]
+#[write_component(BufferWriteMeshVertices)]
+#[write_component(BufferWriteMeshNormals)]
+#[write_component(BufferWriteMeshUvs)]
+#[write_component(BufferWriteMeshTextureIds)]
+#[write_component(IndexedIndirectComponent)]
 pub fn collect_vertices(world: &mut SubWorld) {
-    let mut mesh_vertex_query = <(
-        &MeshId,
-        &MeshVertices<nalgebra::Vector3<f32>>,
-        &MeshNormals<nalgebra::Vector3<f32>>,
-        &MeshUvs<nalgebra::Vector2<f32>>,
-        &VertexBufferEntity,
-    )>::query();
-
-    // Iterate through entities with mesh data and renderer vertices,
-    // collect into a sorted map of mesh id -> buffer length
-    let mesh_vertices = mesh_vertex_query
+    let offsets = <(Entity, &VertexBuffer, &BufferComponent)>::query()
         .par_iter(world)
-        .map(
-            |(mesh_id, mesh_vertices, mesh_normals, mesh_uvs, vertex_buffer_entity)| {
-                (
-                    vertex_buffer_entity.0,
-                    (
-                        *mesh_id,
-                        mesh_vertices.clone(),
-                        mesh_normals.clone(),
-                        mesh_uvs.clone(),
-                    ),
+        .map(|(buffer_entity, _, _)| {
+            let mut query = <(
+                Entity,
+                &MeshId,
+                &MeshVertices<nalgebra::Vector3<f32>>,
+                &MeshNormals<nalgebra::Vector3<f32>>,
+                &MeshUvs<nalgebra::Vector2<f32>>,
+                &MeshTextureIds<i32>,
+                &BufferWriteMeshVertices,
+                &BufferWriteMeshNormals,
+                &BufferWriteMeshUvs,
+                &BufferWriteMeshTextureIds,
+                &IndexedIndirectComponent,
+            )>::query();
+
+            let meshes = query
+                .par_iter(world)
+                .filter_map(
+                    |(entity, mesh_id, vertices, _, _, _, write_vertices, _, _, _, _)| {
+                        let target_entity = write_vertices.to_entity().unwrap_or(entity);
+                        if *target_entity == *buffer_entity {
+                            Some((mesh_id, (entity, vertices)))
+                        } else {
+                            None
+                        }
+                    },
                 )
-            },
-        )
-        .collect::<Vec<(_, _)>>();
+                .collect::<BTreeMap<_, _>>();
 
-    let mut vertex_buffer_query = <(
-        Entity,
-        &BufferComponent,
-        &mut VertexBufferOffsets,
-        &mut Vertices,
-    )>::query();
+            let mut offsets = vec![];
+            let mut offset = 0;
+            for (entity, vertices) in meshes.values() {
+                let len = vertices.get().len();
+                offsets.push((**entity, offset));
+                offset += len;
+            }
 
-    let vertex_buffers = vertex_buffer_query
-        .par_iter_mut(world)
-        .map(|(entity, buffer, offsets, vertices)| (entity, (buffer, offsets, vertices)))
+            (*buffer_entity, (offsets, offset))
+        })
         .collect::<HashMap<_, _>>();
 
-    for (buffer_entity, (_, offsets, vertices)) in vertex_buffers {
-        let meshes = mesh_vertices
-            .iter()
-            .filter_map(|(buffer_id, (mesh_id, vertices, normals, uvs))| {
-                if buffer_id == buffer_entity {
-                    Some((mesh_id, (vertices, normals, uvs)))
-                } else {
-                    None
-                }
-            })
-            .collect::<BTreeMap<_, _>>();
+    for (offsets, total) in offsets.into_values() {
+        for (mesh_entity, offset) in offsets {
+            let (write_vertices, write_normals, write_uvs, write_texture_ids, indirect) = <(
+                &mut BufferWriteMeshVertices,
+                &mut BufferWriteMeshNormals,
+                &mut BufferWriteMeshUvs,
+                &mut BufferWriteMeshTextureIds,
+                &mut IndexedIndirectComponent,
+            )>::query(
+            )
+            .get_mut(world, mesh_entity)
+            .unwrap();
 
-        let mut verts = vec![];
-        let mut offs = vec![];
-        for (_, (vertices, normals, uvs)) in meshes {
-            offs.push(verts.len() * std::mem::size_of::<Vertex>());
+            let vertex_offset = 4 * 3 * offset as u64;
+            let normal_offset = 4 * 3 * offset as u64;
+            let uv_offset = 4 * 2 * offset as u64;
+            let texture_id_offset = 4 * offset as u64;
 
-            for (vertex, (normal, uv)) in vertices.iter().zip(normals.iter().zip(uvs.iter())) {
-                verts.push(Vertex {
-                    pos: [vertex.x, vertex.y, vertex.z],
-                    _pad_0: 1.0,
-                    normal: [normal.x, normal.y, normal.z],
-                    _pad_1: 0.0,
-                    tex_coord: [uv.x, uv.y],
-                    texture: 0,
-                });
-            }
+            let vertex_total = 4 * 3 * total as u64;
+            let normal_total = 4 * 3 * total as u64;
+            let uv_total = 4 * 2 * total as u64;
+
+            write_vertices.set_offset(vertex_offset);
+            write_normals.set_offset(normal_offset + vertex_total);
+            write_uvs.set_offset(uv_offset + vertex_total + normal_total);
+            write_texture_ids
+                .set_offset(texture_id_offset + vertex_total + normal_total + uv_total);
+
+            indirect.0.set_checked(DrawIndexedIndirect {
+                vertex_offset: offset as i32,
+                ..*indirect.0.get()
+            });
         }
-        vertices.0.set(verts);
-        offsets.offsets = offs;
     }
 }
 
 /// Iterate over mesh entities, translate generic components into renderer indices
 #[legion::system]
-#[read_component(MeshId)]
-#[read_component(MeshTriangleIndices<usize>)]
-#[read_component(IndexBufferEntity)]
+#[read_component(IndexBuffer)]
 #[read_component(BufferComponent)]
-#[write_component(IndexBufferOffsets)]
-#[write_component(Indices)]
+#[read_component(MeshId)]
+#[read_component(MeshTriangleIndices<Index>)]
+#[write_component(BufferWriteMeshTriangleIndices)]
+#[write_component(IndexedIndirectComponent)]
 pub fn collect_indices(world: &mut SubWorld) {
-    let mut mesh_index_query =
-        <(&MeshId, &MeshTriangleIndices<usize>, &IndexBufferEntity)>::query();
-
-    // Iterate through entities with mesh data and renderer vertices,
-    // collect into a sorted map of mesh id -> buffer length
-    let mesh_indices = mesh_index_query
+    let offsets = <(Entity, &IndexBuffer, &BufferComponent)>::query()
         .par_iter(world)
-        .map(|(mesh_id, mesh_indices, index_buffer_entity)| {
-            (index_buffer_entity.0, (*mesh_id, mesh_indices.clone()))
+        .map(|(buffer_entity, _, _)| {
+            let mut query = <(
+                Entity,
+                &MeshId,
+                &MeshTriangleIndices<Index>,
+                &BufferWriteMeshTriangleIndices,
+                &IndexedIndirectComponent,
+            )>::query();
+
+            let meshes = query
+                .par_iter(world)
+                .filter_map(|(entity, mesh_id, indices, write_indices, _)| {
+                    let target_entity = write_indices.to_entity().unwrap_or(entity);
+                    if *target_entity == *buffer_entity {
+                        Some((mesh_id, (entity, indices)))
+                    } else {
+                        None
+                    }
+                })
+                .collect::<BTreeMap<_, _>>();
+
+            let mut offsets = vec![];
+            let mut offset = 0;
+            for (entity, indices) in meshes.values() {
+                let len = indices.get().len();
+                offsets.push((**entity, offset, len));
+                offset += len;
+            }
+
+            (*buffer_entity, offsets)
         })
-        .collect::<Vec<(_, _)>>();
-
-    let mut index_buffer_query = <(
-        Entity,
-        &BufferComponent,
-        &mut IndexBufferOffsets,
-        &mut Indices,
-    )>::query();
-
-    let index_buffers = index_buffer_query
-        .par_iter_mut(world)
-        .map(|(entity, buffer, offsets, indices)| (entity, (buffer, offsets, indices)))
         .collect::<HashMap<_, _>>();
 
-    for (buffer_entity, (_, offsets, indices)) in index_buffers {
-        let meshes = mesh_indices
-            .iter()
-            .filter_map(|(buffer_id, (mesh_id, indices))| {
-                if buffer_id == buffer_entity {
-                    Some((mesh_id, indices))
-                } else {
-                    None
-                }
-            })
-            .collect::<BTreeMap<_, _>>();
+    for offsets in offsets.into_values() {
+        for (mesh_entity, offset, len) in offsets.iter() {
+            let (write_indices, indirect) = <(
+                &mut BufferWriteMeshTriangleIndices,
+                &mut IndexedIndirectComponent,
+            )>::query()
+            .get_mut(world, *mesh_entity)
+            .unwrap();
 
-        let mut inds = vec![];
-        let mut offs = vec![];
-        for (_, indices) in meshes {
-            let ind_ofs = inds.len() * std::mem::size_of::<Index>();
-            offs.push(ind_ofs);
-
-            for index in indices.iter() {
-                inds.push(*index as u16);
-            }
+            write_indices.set_offset((*offset * std::mem::size_of::<Index>()) as u64);
+            indirect.0.set_checked(DrawIndexedIndirect {
+                vertex_count: *len as u32,
+                base_index: *offset as u32,
+                ..*indirect.0.get()
+            });
         }
-        indices.0.set(inds);
-        offsets.offsets = offs;
     }
 }
 
 /// Iterate over mesh entities, translate generic components into instance and indirect data
 #[legion::system]
 #[read_component(InstanceComponent)]
+#[read_component(MeshEntity)]
 #[write_component(IndexedIndirectComponent)]
 #[write_component(BufferWritePosition)]
 #[write_component(BufferWriteOrientation)]
@@ -1051,12 +1035,14 @@ pub fn collect_indices(world: &mut SubWorld) {
 #[write_component(BufferWriteIndexedIndirect)]
 pub fn collect_instances_indirects(world: &mut SubWorld) {
     let mut query = <(
+        Entity,
         &InstanceComponent,
-        &mut IndexedIndirectComponent,
-        &mut BufferWritePosition,
-        &mut BufferWriteOrientation,
-        &mut BufferWriteInstances,
-        &mut BufferWriteIndexedIndirect,
+        &MeshEntity,
+        &IndexedIndirectComponent,
+        &BufferWritePosition,
+        &BufferWriteOrientation,
+        &BufferWriteInstances,
+        &BufferWriteIndexedIndirect,
     )>::query();
 
     let position_size: wgpu::BufferAddress = 4 * 4;
@@ -1064,35 +1050,50 @@ pub fn collect_instances_indirects(world: &mut SubWorld) {
     let instance_size = std::mem::size_of::<Instance>() as wgpu::BufferAddress;
     let total_size = position_size + orientation_size + instance_size;
 
-    let mut offset = 0 as wgpu::BufferAddress;
-    query.for_each_mut(
-        world,
-        |(
-            _,
-            IndexedIndirectComponent(indexed_indirect),
+    let offsets = query
+        .iter(world)
+        .enumerate()
+        .map(
+            |(offset, (entity, _, MeshEntity(mesh_entity), _, _, _, _, _))| {
+                let mesh_indirect = <&IndexedIndirectComponent>::query()
+                    .get(world, *mesh_entity)
+                    .unwrap();
+                (*entity, offset as u64, *mesh_indirect.0.get())
+            },
+        )
+        .collect::<Vec<_>>();
+
+    for (entity, offset, indirect) in offsets {
+        let (
+            indexed_indirect,
             buffer_write_position,
             buffer_write_orientation,
             buffer_write_instances,
-            buffer_write_indirects,
-        )| {
-            let total_offset = total_size * offset;
+            buffer_write_indexed_indirect,
+        ) = <(
+            &mut IndexedIndirectComponent,
+            &mut BufferWritePosition,
+            &mut BufferWriteOrientation,
+            &mut BufferWriteInstances,
+            &mut BufferWriteIndexedIndirect,
+        )>::query()
+        .get_mut(world, entity)
+        .unwrap();
+        let total_offset = total_size * offset;
 
-            // Set instance write offsets
-            buffer_write_position.set_offset(total_offset);
-            buffer_write_orientation.set_offset(total_offset + position_size);
-            buffer_write_instances.set_offset(total_offset + position_size + orientation_size);
+        // Set instance write offsets
+        buffer_write_position.set_offset(total_offset);
+        buffer_write_orientation.set_offset(total_offset + position_size);
+        buffer_write_instances.set_offset(total_offset + position_size + orientation_size);
 
-            // Set indirect data
-            let indirect = *indexed_indirect.get();
-            indexed_indirect.set(DrawIndexedIndirect {
-                base_instance: offset as u32,
-                ..indirect
-            });
+        // Set indirect data
+        indexed_indirect.0.set(DrawIndexedIndirect {
+            base_instance: offset as u32,
+            instance_count: 1,
+            ..indirect
+        });
 
-            buffer_write_indirects.set_offset(
-                std::mem::size_of::<DrawIndexedIndirect>() as wgpu::BufferAddress * offset,
-            );
-            offset += 1;
-        },
-    );
+        buffer_write_indexed_indirect
+            .set_offset(std::mem::size_of::<DrawIndexedIndirect>() as wgpu::BufferAddress * offset);
+    }
 }

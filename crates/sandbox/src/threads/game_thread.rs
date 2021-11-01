@@ -16,7 +16,7 @@ use wgpu::Queue;
 
 use crate::{
     renderers::cube::{
-        Index, IndexedIndirectComponent, Indices, Instance, InstanceComponent, Vertex, Vertices,
+        Index, IndexedIndirectComponent, Instance, InstanceComponent,
     },
     spin_loop,
     systems::{
@@ -68,11 +68,23 @@ pub fn game_thread<'a>(
             .add_system(crate::renderers::cube::collect_instances_indirects_system())
             .flush()
             .add_system(antigen_wgpu::systems::buffer_write_system::<
-                Vertices,
-                Vec<Vertex>,
+                crate::assemblages::MeshVerticesVector3,
+                Vec<nalgebra::Vector3<f32>>,
             >())
             .add_system(antigen_wgpu::systems::buffer_write_system::<
-                Indices,
+                crate::assemblages::MeshNormalsVector3,
+                Vec<nalgebra::Vector3<f32>>,
+            >())
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                crate::assemblages::MeshUvsVector2,
+                Vec<nalgebra::Vector2<f32>>,
+            >())
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                crate::assemblages::MeshTextureIdsI32,
+                Vec<i32>,
+            >())
+            .add_system(antigen_wgpu::systems::buffer_write_system::<
+                crate::assemblages::MeshTriangleIndicesU16,
                 Vec<Index>,
             >())
             .add_system(antigen_wgpu::systems::buffer_write_system::<

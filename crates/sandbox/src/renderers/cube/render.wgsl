@@ -6,8 +6,8 @@ struct Locals {
 };
 
 struct VertexInput {
-    [[location(0)]] position: vec4<f32>;
-    [[location(1)]] normal: vec4<f32>;
+    [[location(0)]] position: vec3<f32>;
+    [[location(1)]] normal: vec3<f32>;
     [[location(2)]] tex_coord: vec2<f32>;
     [[location(3)]] texture: i32;
 };
@@ -19,7 +19,7 @@ struct InstanceInput {
 
 struct VertexOutput {
     [[builtin(position)]] position: vec4<f32>;
-    [[location(0)]] normal: vec4<f32>;
+    [[location(0)]] normal: vec3<f32>;
     [[location(1)]] tex_coord: vec2<f32>;
     [[location(2)]] texture: i32;
 };
@@ -38,30 +38,30 @@ fn vs_main(
     let instance_orientation = quat_from_vec4(instance.orientation);
 
     let model_pos = model.position;
-    let model_pos = quat_mul(instance_orientation, model_pos.xyz);
-    let model_pos = model_pos.xyz + instance.position.xyz;
+    let model_pos = quat_mul(instance_orientation, model_pos);
+    let model_pos = model_pos + instance.position.xyz;
 
-    let model_pos = model_pos.xyz - r_locals.position.xyz;
-    let model_pos = quat_mul(r_locals.orientation, model_pos.xyz);
+    let model_pos = model_pos - r_locals.position.xyz;
+    let model_pos = quat_mul(r_locals.orientation, model_pos);
 
-    let model_normal = model.normal.xyz;
+    let model_normal = model.normal;
     let model_normal = quat_mul(instance_orientation, model_normal);
 
-    var out: VertexOutput;
-    out.position = r_locals.projection * vec4<f32>(model_pos, model.position.w);
-    out.normal = vec4<f32>(model_normal, 0.0);
-    out.tex_coord = model.tex_coord;
-    out.texture = model.texture;
-    return out;
+    return VertexOutput (
+        r_locals.projection * vec4<f32>(model_pos, 1.0),
+        model_normal,
+        model.tex_coord,
+        model.texture,
+    );
 }
 
 [[stage(fragment)]]
 fn fs_main(in: VertexOutput) -> [[location(0)]] vec4<f32> {
-    let uv = vec2<i32>(in.tex_coord * 256.0) % 256;
+    let uv = vec2<i32>((abs(in.tex_coord) * 256.0) % 256.0);
     let tex = textureLoad(r_color, uv, in.texture, 0);
     let v = f32(tex.x) / 255.0;
     let color = vec4<f32>(1.0 - (v * 5.0), 1.0 - (v * 15.0), 1.0 - (v * 50.0), 1.0);
-    let light = (dot(normalize(vec3<f32>(1.0)), in.normal.xyz) + 1.0) * 0.5;
+    let light = (dot(normalize(vec3<f32>(1.0)), in.normal) + 1.0) * 0.5;
     return color * light;
 }
 

@@ -94,35 +94,29 @@ fn main() {
     let window_manager = WindowManager::default();
     let (winit_requester, winit_responder) = remote_channel(window_manager);
 
-    let instance = wgpu::Instance::new(wgpu::Backends::all());
+    let instance = wgpu::Instance::new(wgpu::util::backend_bits_from_env().unwrap_or(wgpu::Backends::PRIMARY));
 
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::default(),
+        power_preference: wgpu::PowerPreference::HighPerformance,
         compatible_surface: None,
         force_fallback_adapter: false,
     }))
     .unwrap();
 
-    let (device, queue) = pollster::block_on(
-        adapter.request_device(
-            &wgpu::DeviceDescriptor {
-                label: None,
-                features: wgpu::Features::POLYGON_MODE_LINE
-                | wgpu::Features::CONSERVATIVE_RASTERIZATION
-                | wgpu::Features::SPIRV_SHADER_PASSTHROUGH
-                | wgpu::Features::PUSH_CONSTANTS
-                | wgpu::Features::TEXTURE_BINDING_ARRAY
-                //| wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
-                | wgpu::Features::UNSIZED_BINDING_ARRAY,
-                limits: wgpu::Limits {
-                    max_push_constant_size: 4,
-                    ..wgpu::Limits::downlevel_defaults()
-                }
-                .using_resolution(adapter.limits()),
-            },
-            None,
-        ),
-    )
+    let (device, queue) = pollster::block_on(adapter.request_device(
+        &wgpu::DeviceDescriptor {
+            label: None,
+            features: wgpu::Features::POLYGON_MODE_LINE,
+            //| wgpu::Features::CONSERVATIVE_RASTERIZATION
+            //| wgpu::Features::SPIRV_SHADER_PASSTHROUGH,
+            //| wgpu::Features::PUSH_CONSTANTS,
+            //| wgpu::Features::TEXTURE_BINDING_ARRAY
+            //| wgpu::Features::SAMPLED_TEXTURE_AND_STORAGE_BUFFER_ARRAY_NON_UNIFORM_INDEXING,
+            //| wgpu::Features::UNSIZED_BINDING_ARRAY,
+            limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+        },
+        None,
+    ))
     .unwrap();
 
     let wgpu_manager = WgpuManager::new(instance, adapter, device, queue);

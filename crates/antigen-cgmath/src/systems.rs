@@ -1,5 +1,7 @@
 use cgmath::InnerSpace;
 use cgmath::SquareMatrix;
+use legion::world::SubWorld;
+use legion::Entity;
 
 use crate::components::*;
 use crate::OPENGL_TO_WGPU_MATRIX;
@@ -48,15 +50,38 @@ pub fn look_to_quat(
 }
 
 #[legion::system(par_for_each)]
+#[read_component(FieldOfView)]
+#[read_component(AspectRatio)]
+#[read_component(NearPlane)]
+#[read_component(FarPlane)]
 pub fn perspective_projection(
-    _: &PerspectiveProjection,
-    field_of_view: &FieldOfView,
-    NearPlane(near_plane): &NearPlane,
-    FarPlane(far_plane): &FarPlane,
-    AspectRatio(aspect_ratio): &AspectRatio,
+    world: &SubWorld,
+    entity: &Entity,
+    PerspectiveProjection {
+        fov_entity,
+        aspect_ratio_entity,
+        near_plane_entity,
+        far_plane_entity,
+    }: &PerspectiveProjection,
     projection_matrix: &mut ProjectionMatrix,
 ) {
-    **projection_matrix = OPENGL_TO_WGPU_MATRIX * field_of_view.to_matrix(*aspect_ratio, *near_plane, *far_plane);
+    use legion::IntoQuery;
+
+    let field_of_view = <&FieldOfView>::query()
+        .get(world, fov_entity.unwrap_or(*entity))
+        .unwrap();
+    let AspectRatio(aspect_ratio) = <&AspectRatio>::query()
+        .get(world, aspect_ratio_entity.unwrap_or(*entity))
+        .unwrap();
+    let NearPlane(near_plane) = <&NearPlane>::query()
+        .get(world, near_plane_entity.unwrap_or(*entity))
+        .unwrap();
+    let FarPlane(far_plane) = <&FarPlane>::query()
+        .get(world, far_plane_entity.unwrap_or(*entity))
+        .unwrap();
+
+    **projection_matrix =
+        OPENGL_TO_WGPU_MATRIX * field_of_view.to_matrix(*aspect_ratio, *near_plane, *far_plane);
 }
 
 #[legion::system(par_for_each)]

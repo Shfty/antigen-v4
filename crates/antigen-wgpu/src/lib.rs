@@ -25,7 +25,7 @@ atomic_id!(NEXT_BUFFER_ID, BufferId);
 
 /// Indirect draw data for use with an indirect buffer
 #[repr(C)]
-#[derive(Copy, Clone, serde::Serialize, serde::Deserialize, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DrawIndirect {
     pub vertex_count: u32, // The number of vertices to draw.
     pub instance_count: u32, // The number of instances to draw.
@@ -35,14 +35,14 @@ pub struct DrawIndirect {
 
 /// Indirect multi draw count
 #[repr(C)]
-#[derive(Copy, Clone, serde::Serialize, serde::Deserialize, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DrawIndirectCount {
     pub count: u32, // Number of draw calls to issue.
 }
 
 /// Indexed indirect draw data for use with an indirect buffer
 #[repr(C)]
-#[derive(Copy, Clone, serde::Serialize, serde::Deserialize, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DrawIndexedIndirect {
     pub vertex_count: u32,   // The number of vertices to draw.
     pub instance_count: u32, // The number of instances to draw.
@@ -59,7 +59,7 @@ impl CastSlice<u8> for DrawIndexedIndirect {
 
 /// Indexed indirect multi draw count
 #[repr(C)]
-#[derive(Copy, Clone, serde::Serialize, serde::Deserialize, bytemuck::Zeroable, bytemuck::Pod)]
+#[derive(Debug, Default, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize, bytemuck::Zeroable, bytemuck::Pod)]
 pub struct DrawIndexedIndirectCount {
     pub count: u32, // Number of draw calls to issue.
 }
