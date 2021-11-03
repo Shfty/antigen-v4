@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use crate::{CrosstermEventQueue, MainLoopState};
+use crate::CrosstermEventQueue;
 
 #[profiling::function]
 pub fn crossterm_poll_input(sender: &crossbeam_channel::Sender<crossterm::event::Event>) {

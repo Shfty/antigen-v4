@@ -18,7 +18,7 @@ impl serde::Serialize for BufferComponent {
     where
         S: serde::Serializer,
     {
-        let mut s = serializer.serialize_struct("BufferComponent", 0)?;
+        let s = serializer.serialize_struct("BufferComponent", 0)?;
         s.end()
     }
 }

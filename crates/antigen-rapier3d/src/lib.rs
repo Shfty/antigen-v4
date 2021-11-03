@@ -31,7 +31,7 @@ impl serde::Serialize for Gravity {
 }
 
 impl<'de> serde::Deserialize<'de> for Gravity {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(_: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -52,7 +52,7 @@ impl serde::Serialize for PhysicsPipelineComponent {
 }
 
 impl<'de> serde::Deserialize<'de> for PhysicsPipelineComponent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(_: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -173,7 +173,7 @@ pub fn create_rigid_bodies(
     world: &mut SubWorld,
     rigid_body: &mut RigidBodyComponent,
     position: Option<&mut antigen_cgmath::components::Position3d>,
-    orientation: Option<&mut antigen_cgmath::components::Orientation>,
+    _: Option<&mut antigen_cgmath::components::Orientation>,
 ) {
     if let Some(mut pending) = rigid_body.pending_rigid_body.take() {
         if let Ok(rigid_body_set) =
@@ -184,7 +184,7 @@ pub fn create_rigid_bodies(
                 pending.set_translation(vector![position.x, position.y, position.z], true);
             }
 
-            /*
+            /* TODO: Orientation
             if let Some(orientation) = orientation {
                 pending.set_rotation(
                     nalgebra::Quaternion::new(
@@ -316,7 +316,7 @@ pub fn rigid_body_kinematic_position(
     world: &mut SubWorld,
     rigid_body: &RigidBodyComponent,
     position: Option<&mut antigen_cgmath::components::Position3d>,
-    orientation: Option<&mut antigen_cgmath::components::Orientation>,
+    _: Option<&mut antigen_cgmath::components::Orientation>,
 ) {
     if let Some(handle) = rigid_body.handle {
         if let Ok(rigid_body_set) =
@@ -331,7 +331,7 @@ pub fn rigid_body_kinematic_position(
                     ]);
                 }
 
-                /*
+                /* TODO: Orientation
                 if let Some(orientation) = orientation {
                     body.set_next_kinematic_rotation(nalgebra::Quaternion::new(
                         orientation.s,

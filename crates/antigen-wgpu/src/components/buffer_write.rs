@@ -1,9 +1,9 @@
 use std::marker::PhantomData;
 
-use legion::Entity;
-use wgpu::BufferAddress;
 use crate::CastSlice;
-use on_change::{OnChange, OnChangeTrait};
+use legion::Entity;
+use on_change::OnChangeTrait;
+use wgpu::BufferAddress;
 
 #[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BufferWrite<T: OnChangeTrait<D>, D: CastSlice<u8>> {

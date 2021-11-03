@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use legion::Entity;
 use on_change::OnChangeTrait;
 use serde::ser::SerializeStruct;
-use wgpu::{Extent3d, ImageCopyTexture, ImageCopyTextureBase, ImageDataLayout};
+use wgpu::{Extent3d, ImageCopyTextureBase, ImageDataLayout};
 
 use crate::CastSlice;
 
@@ -30,7 +30,7 @@ impl<T: OnChangeTrait<D>, D: CastSlice<u8>> serde::Serialize for TextureWrite<T,
 }
 
 impl<'de, T: OnChangeTrait<D>, D: CastSlice<u8>> serde::Deserialize<'de> for TextureWrite<T, D> {
-    fn deserialize<DE>(deserializer: DE) -> Result<Self, DE::Error>
+    fn deserialize<DE>(_: DE) -> Result<Self, DE::Error>
     where
         DE: serde::Deserializer<'de>,
     {

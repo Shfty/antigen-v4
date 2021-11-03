@@ -9,11 +9,7 @@ use lazy::Lazy;
 use legion::{world::SubWorld, Entity, IntoQuery};
 use on_change::{OnChange, OnChangeTrait};
 use rayon::iter::ParallelIterator;
-use std::{
-    borrow::Cow,
-    collections::BTreeMap,
-    sync::{atomic::Ordering, Arc},
-};
+use std::{borrow::Cow, collections::BTreeMap, sync::Arc};
 use wgpu::{
     BindGroup, BindGroupLayoutDescriptor, BindGroupLayoutEntry, Buffer, BufferAddress,
     BufferDescriptor, ComputePipeline, Device, RenderPipeline, ShaderModuleDescriptor,
@@ -25,7 +21,10 @@ use antigen_resources::Timing;
 use antigen_cgmath::components::{EyePosition, LookAt, ProjectionMatrix};
 use antigen_wgpu::DrawIndexedIndirect;
 
-use crate::assemblages::{IndexBuffer, MeshEntity, MeshId, MeshNormals, MeshTextureIds, MeshTextureIdsI32, MeshTriangleIndices, MeshUvs, MeshVertices, VertexBuffer};
+use crate::assemblages::{
+    IndexBuffer, MeshEntity, MeshId, MeshNormals, MeshTextureIds, MeshTextureIdsI32,
+    MeshTriangleIndices, MeshUvs, MeshVertices, VertexBuffer,
+};
 
 pub type BufferWriteMeshVertices =
     BufferWrite<MeshVertices<nalgebra::Vector3<f32>>, Vec<nalgebra::Vector3<f32>>>;
@@ -199,6 +198,12 @@ pub struct IndexedIndirectComponent(pub OnChange<DrawIndexedIndirect>);
 impl IndexedIndirectComponent {
     pub fn new(indirect: DrawIndexedIndirect) -> Self {
         IndexedIndirectComponent(OnChange::new_dirty(indirect))
+    }
+}
+
+impl Default for IndexedIndirectComponent {
+    fn default() -> Self {
+        Self::new(Default::default())
     }
 }
 

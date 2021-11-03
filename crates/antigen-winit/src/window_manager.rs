@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use legion::{Entity, World};
 use winit::{
@@ -9,7 +6,10 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use crate::{WindowState, components::{RedrawMode, WindowComponent}};
+use crate::{
+    components::{RedrawMode, WindowComponent},
+    WindowState,
+};
 
 #[derive(Debug, Default)]
 pub struct WindowManager {
@@ -57,7 +57,8 @@ impl WindowManager {
         self.entity_ids.remove(window_id);
 
         if let Some(mut entry) = world.entry(entity) {
-            if let Ok(WindowComponent(window_state)) = entry.get_component_mut::<WindowComponent>() {
+            if let Ok(WindowComponent(window_state)) = entry.get_component_mut::<WindowComponent>()
+            {
                 *window_state = WindowState::Closed
             }
         }
