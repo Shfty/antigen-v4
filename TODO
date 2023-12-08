@@ -8,12 +8,20 @@
             [✓] Pack vertices in system
             [✓] Pack indices in system
             [>] Pack instances, indirects in system
+                [✓] First working implementation
+                [ ] Fix UV corruption on marauder instance
                 * Indirect vertex count, base index, vertex offset need to be updated based on automatic packing
                 * Indirect is per-instance, so will need a way to fetch vertex / index offsets for this
         [ ] Implement on-change updates for vertex, index, instance, indirect data
     [ ] Texture loading
 
 [>] Map loading
+    [✓] Single mesh
+    [✓] Per-entity meshes
+    [✓] Brush collision
+    [ ] Point entities
+
+[ ] Refactor all crates with derive-more and derive-new
 
 [ ] Algebraic types refactor
     [ ] Generalized components / systems should use mint types

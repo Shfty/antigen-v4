@@ -10,6 +10,12 @@ impl Default for Orientation {
     }
 }
 
+impl Orientation {
+    pub fn new(quaternion: Quaternion<f32>) -> Self {
+        Orientation(OnChange::new_dirty(quaternion))
+    }
+}
+
 impl std::ops::Deref for Orientation {
     type Target = OnChange<Quaternion<f32>>;
 

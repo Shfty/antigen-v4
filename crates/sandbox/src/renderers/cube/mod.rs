@@ -819,7 +819,7 @@ pub fn update_look(
     #[resource] timing: &Timing,
 ) {
     let total = timing.total_time().as_secs_f32();
-    let pos = cgmath::Point3::new(total.sin() * 5.0, 2.5, total.cos() * 1.5);
+    let pos = cgmath::Point3::new(total.sin() * 5.0, 4.5, total.cos() * 1.5);
     *eye_position = pos;
 }
 

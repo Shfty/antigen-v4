@@ -15,7 +15,7 @@ use antigen_wgpu::{
 };
 use antigen_winit::components::{RedrawMode, RedrawModeComponent, WindowComponent, WindowTitle};
 
-use cgmath::{InnerSpace, One, Zero};
+use cgmath::{InnerSpace, One, Rotation3, Zero};
 use legion::{Entity, World};
 use on_change::OnChange;
 use wgpu::BufferAddress;
@@ -370,6 +370,7 @@ impl Default for MeshMode {
 
 pub struct MapData {
     geo_map: shambler::GeoMap,
+    brush_centers: shambler::brush::BrushCenters,
     entity_centers: shambler::entity::EntityCenters,
     vertices: shambler::face::FaceVertices,
     normals: shambler::face::FaceNormals,
@@ -438,6 +439,7 @@ pub fn build_map_data(map: shambler::shalrath::repr::Map) -> MapData {
         &face_planes,
         &face_vertices,
         &face_centers,
+        shambler::face::FaceWinding::Clockwise,
     );
 
     // Generate tangents
@@ -475,6 +477,7 @@ pub fn build_map_data(map: shambler::shalrath::repr::Map) -> MapData {
 
     MapData {
         geo_map,
+        brush_centers,
         entity_centers,
         vertices: face_vertices,
         normals: face_normals,
@@ -488,16 +491,15 @@ pub fn build_map_data(map: shambler::shalrath::repr::Map) -> MapData {
 }
 
 pub fn build_map_mesh_single(
-    source: &str,
+    map_data: &MapData,
     mesh_mode: MeshMode,
+    inverse_scale_factor: f32,
 ) -> (
     Vec<nalgebra::Vector3<f32>>,
     Vec<nalgebra::Vector3<f32>>,
     Vec<nalgebra::Vector2<f32>>,
     Vec<usize>,
 ) {
-    let map = source.parse::<shambler::shalrath::repr::Map>().unwrap();
-
     let MapData {
         geo_map,
         vertices: face_vertices,
@@ -509,7 +511,7 @@ pub fn build_map_mesh_single(
         face_face_containment,
         brush_face_containment,
         ..
-    } = build_map_data(map);
+    } = map_data;
 
     // Generate mesh
     let mut mesh_normals: Vec<shambler::Vector3> = Default::default();
@@ -518,7 +520,7 @@ pub fn build_map_mesh_single(
     let mut mesh_line_indices: Vec<usize> = Default::default();
     let mut mesh_triangle_indices: Vec<usize> = Default::default();
 
-    for face_id in geo_map.faces {
+    for face_id in &geo_map.faces {
         match mesh_mode {
             MeshMode::Normal => {
                 if face_duplicates.contains(&face_id) {
@@ -554,17 +556,17 @@ pub fn build_map_mesh_single(
         let line_indices = &line_indices[&face_id];
         let triangle_indices = &triangle_indices[&face_id];
 
-        mesh_vertices.extend(
-            face_vertices
-                .vertices(&face_id)
-                .unwrap()
-                .iter()
-                .map(|v| nalgebra::vector![v.x / 64.0, v.z / 64.0, v.y / 64.0]),
-        );
+        mesh_vertices.extend(face_vertices.vertices(&face_id).unwrap().iter().map(|v| {
+            nalgebra::vector![
+                -v.x / inverse_scale_factor,
+                v.z / inverse_scale_factor,
+                v.y / inverse_scale_factor
+            ]
+        }));
         mesh_normals.extend(
             face_normals[&face_id]
                 .iter()
-                .map(|n| nalgebra::vector![n.x, n.z, n.y]),
+                .map(|n| nalgebra::vector![-n.x, n.z, n.y]),
         );
         mesh_uvs.extend(face_uvs[&face_id].iter().copied());
         mesh_line_indices.extend(line_indices.iter().copied().map(|i| i + index_offset));
@@ -580,8 +582,9 @@ pub fn build_map_mesh_single(
 }
 
 pub fn build_map_meshes_entities(
-    source: &str,
+    map_data: &MapData,
     mesh_mode: MeshMode,
+    inverse_scale_factor: f32,
 ) -> Vec<(
     nalgebra::Vector3<f32>,
     Vec<nalgebra::Vector3<f32>>,
@@ -589,8 +592,6 @@ pub fn build_map_meshes_entities(
     Vec<nalgebra::Vector2<f32>>,
     Vec<usize>,
 )> {
-    let map = source.parse::<shambler::shalrath::repr::Map>().unwrap();
-
     let MapData {
         geo_map,
         entity_centers,
@@ -602,7 +603,8 @@ pub fn build_map_meshes_entities(
         face_duplicates,
         face_face_containment,
         brush_face_containment,
-    } = build_map_data(map);
+        ..
+    } = map_data;
 
     let mut entity_meshes = vec![];
 
@@ -620,7 +622,7 @@ pub fn build_map_meshes_entities(
             .collect::<Vec<_>>();
 
         // Generate mesh
-        let mesh_origin = *&entity_centers[&entity_id] / 64.0;
+        let mesh_origin = *&entity_centers[&entity_id] / inverse_scale_factor;
         let mut mesh_normals: Vec<shambler::Vector3> = Default::default();
         let mut mesh_vertices: Vec<shambler::Vector3> = Default::default();
         let mut mesh_uvs: Vec<shambler::Vector2> = Default::default();
@@ -696,15 +698,15 @@ pub fn build_map_meshes_entities(
                 let triangle_indices = &triangle_indices[&face_id];
 
                 mesh_vertices.extend(face_vertices.vertices(&face_id).unwrap().iter().map(|v| {
-                    let x = (v.x / 64.0) - mesh_origin.x;
-                    let y = (v.z / 64.0) - mesh_origin.z;
-                    let z = (v.y / 64.0) - mesh_origin.y;
+                    let x = (-v.x / inverse_scale_factor) - mesh_origin.x;
+                    let y = (v.z / inverse_scale_factor) - mesh_origin.z;
+                    let z = (v.y / inverse_scale_factor) - mesh_origin.y;
                     nalgebra::vector![x, y, z]
                 }));
                 mesh_normals.extend(
                     face_normals[&face_id]
                         .iter()
-                        .map(|n| nalgebra::vector![n.x, n.z, n.y]),
+                        .map(|n| nalgebra::vector![-n.x, n.z, n.y]),
                 );
                 mesh_uvs.extend(face_uvs[&face_id].iter().copied());
                 mesh_line_indices.extend(line_indices.iter().copied().map(|i| i + index_offset));
@@ -725,21 +727,76 @@ pub fn build_map_meshes_entities(
     entity_meshes
 }
 
+pub fn build_map_collision_brushes(
+    map_data: &MapData,
+    inverse_scale_factor: f32,
+) -> Vec<(nalgebra::Vector3<f32>, Vec<nalgebra::Vector3<f32>>)> {
+    let MapData {
+        geo_map,
+        brush_centers,
+        vertices: face_vertices,
+        ..
+    } = map_data;
+
+    let mut brush_meshes = vec![];
+
+    for (brush_id, face_ids) in &geo_map.brush_faces {
+        // Generate mesh
+        let brush_origin = *&brush_centers[&brush_id] / inverse_scale_factor;
+        let mut mesh_vertices: Vec<shambler::Vector3> = Default::default();
+
+        for face_id in face_ids {
+            mesh_vertices.extend(face_vertices.vertices(&face_id).unwrap().iter().map(|v| {
+                let x = (-v.x / inverse_scale_factor) - brush_origin.x;
+                let y = (v.z / inverse_scale_factor) - brush_origin.z;
+                let z = (v.y / inverse_scale_factor) - brush_origin.y;
+                nalgebra::vector![x, y, z]
+            }));
+        }
+
+        brush_meshes.push((brush_origin.xzy(), align_vertex_data(mesh_vertices)));
+    }
+
+    brush_meshes
+}
+
 pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
+    let geo_inverse_scale_factor = 64.0;
+    let map_inverse_scale_factor = 32.0;
+
     // Load meshes
     let tetrahedron_map =
         include_str!("../../../../../sif/crates/shalrath/test_data/tetrahedron.map");
+    let tetrahedron_map = tetrahedron_map
+        .parse::<shambler::shalrath::repr::Map>()
+        .unwrap();
+    let tetrahedron_map_data = build_map_data(tetrahedron_map);
     let (tetrahedron_vertices, tetrahedron_normals, tetrahedron_uvs, tetrahedron_triangle_indices) =
-        build_map_mesh_single(tetrahedron_map, MeshMode::Normal);
+        build_map_mesh_single(
+            &tetrahedron_map_data,
+            MeshMode::Normal,
+            geo_inverse_scale_factor,
+        );
 
     let cube_map = include_str!("../../../../../sif/crates/shalrath/test_data/cube.map");
+    let cube_map = cube_map.parse::<shambler::shalrath::repr::Map>().unwrap();
+    let cube_map_data = build_map_data(cube_map);
     let (cube_vertices, cube_normals, cube_uvs, cube_triangle_indices) =
-        build_map_mesh_single(cube_map, MeshMode::Normal);
+        build_map_mesh_single(&cube_map_data, MeshMode::Normal, geo_inverse_scale_factor);
 
     let abstract_test_map =
         include_str!("../../../../../sif/crates/shalrath/test_data/abstract-test.map",);
-    let abstract_test_meshes =
-        build_map_meshes_entities(abstract_test_map, MeshMode::Normal);
+    let abstract_test_map = abstract_test_map
+        .parse::<shambler::shalrath::repr::Map>()
+        .unwrap();
+    let abstract_test_map_data = build_map_data(abstract_test_map);
+    let abstract_test_meshes = build_map_meshes_entities(
+        &abstract_test_map_data,
+        MeshMode::Normal,
+        map_inverse_scale_factor,
+    );
+    let abstract_test_collision =
+        build_map_collision_brushes(&abstract_test_map_data, map_inverse_scale_factor);
 
     let obj_source = include_bytes!("../renderers/skybox/models/marauder.obj");
     let (obj_vertices, obj_normals, obj_uvs, obj_indices) = load_obj(obj_source);
@@ -798,20 +855,31 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     ));
 
     // Colliders
-    world.push((
-        Name::new("Floor Collision"),
-        antigen_rapier3d::ColliderComponent {
-            physics_sim_entity,
-            parent_entity: None,
-            pending_collider: Some(
-                ColliderBuilder::cuboid(100.0, 0.1, 100.0)
-                    .translation(antigen_rapier3d::rapier3d::prelude::vector![0.0, -5.0, 0.0])
+    for (i, (origin, vertices)) in abstract_test_collision.into_iter().enumerate() {
+        world.push((
+            Name::new(format!("Abstract Test Map Collider {}", i)),
+            antigen_rapier3d::ColliderComponent {
+                physics_sim_entity,
+                parent_entity: None,
+                pending_collider: Some(
+                    ColliderBuilder::convex_hull(
+                        &vertices
+                            .iter()
+                            .copied()
+                            .map(|v| nalgebra::point![v.x, v.y, v.z])
+                            .collect::<Vec<_>>()[..],
+                    )
+                    .unwrap()
+                    .translation(antigen_rapier3d::rapier3d::prelude::vector![
+                        origin.x, origin.y, origin.z
+                    ])
                     .build(),
-            ),
-            parent_handle: None,
-            handle: None,
-        },
-    ));
+                ),
+                parent_handle: None,
+                handle: None,
+            },
+        ));
+    }
 
     let tetrahedron_collider = ColliderBuilder::convex_hull(
         &tetrahedron_vertices
@@ -930,7 +998,7 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
 
     let camera_entity = world.push((
         EyePosition(cgmath::Point3::new(0.0, 0.0, 5.0)),
-        LookAt::default(),
+        LookAt(cgmath::Point3::new(0.0, 2.0, 0.0)),
         UpVector::default(),
         antigen_cgmath::components::Orientation::default(),
         PerspectiveProjection {
@@ -1036,7 +1104,9 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
         let offset: cgmath::Vector3<f32> = dir.xyz();
         world.push((
             Name::new(format!("Tetrahedron #{}", i)),
-            antigen_cgmath::components::Position3d::new(offset * 3.0),
+            antigen_cgmath::components::Position3d::new(
+                (cgmath::Vector3::unit_y() * 4.0) + (offset * 3.0),
+            ),
             antigen_cgmath::components::Orientation::default(),
             crate::components::SphereBounds(1.0),
             // Instance data
@@ -1122,8 +1192,8 @@ pub fn cube_renderer(world: &mut World, wgpu_manager: &WgpuManager) {
     // OBJ entity
     world.push((
         Name::new("OBJ"),
-        antigen_cgmath::components::Position3d::new(cgmath::Vector3::zero()),
-        antigen_cgmath::components::Orientation::default(),
+        antigen_cgmath::components::Position3d::new(cgmath::Vector3::new(0.0, 2.5, 3.5)),
+        antigen_cgmath::components::Orientation::new(cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_y(), cgmath::Deg(180.0))),
         crate::components::SphereBounds(3.0),
         crate::renderers::cube::InstanceComponent::default(),
         BufferWritePosition::new(None, Some(instance_buffer_entity), 0),
